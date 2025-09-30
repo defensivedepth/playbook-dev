@@ -7,7 +7,7 @@ detection_category: ''
 detection_type: sigma
 contributors:
     - SecurityOnionSolutions
-created: "2025-09-29"
+created: "2025-09-29T00:00:00Z"
 questions:
     - question_id: PROC020
       question: What was the full command executed including all esentutl.exe parameters and target file paths?

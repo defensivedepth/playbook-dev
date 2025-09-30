@@ -7,7 +7,7 @@ detection_category: ''
 detection_type: sigma
 contributors:
     - SecurityOnionSolutions
-created: "2025-09-29"
+created: "2025-09-29T00:00:00Z"
 questions:
     - question_id: PROC007
       question: Were there attempts to access LSASS memory, credential stores, or other authentication mechanisms during mimikatz execution?

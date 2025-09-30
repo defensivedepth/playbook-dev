@@ -7,7 +7,7 @@ detection_category: ''
 detection_type: sigma
 contributors:
     - SecurityOnionSolutions
-created: "2025-09-29"
+created: "2025-09-29T00:00:00Z"
 questions:
     - question_id: PS004
       question: What specific PowerShell commandlets from the detection list were found in the script block content?

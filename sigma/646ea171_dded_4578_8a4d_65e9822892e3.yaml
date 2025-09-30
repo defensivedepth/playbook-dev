@@ -7,7 +7,7 @@ detection_category: ''
 detection_type: sigma
 contributors:
     - SecurityOnionSolutions
-created: "2025-09-29"
+created: "2025-09-29T00:00:00Z"
 questions:
     - question_id: PROC007
       question: Was LSASS targeted by this rundll32 comsvcs.dll memory dump operation?
