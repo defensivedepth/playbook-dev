@@ -1,0 +1,245 @@
+name: Malicious PowerShell Commandlets - ScriptBlock
+id: 0
+description: PowerShell script execution was detected containing commandlets from well-known exploitation frameworks including PowerShell Empire, Mimikatz, PowerSploit, and other post-exploitation tools. These commandlets are commonly used for credential harvesting, privilege escalation, system discovery, and persistence mechanisms. The detection requires investigation to determine if this represents authorized security testing, legitimate administrative activity, or unauthorized tool usage.
+type: detection
+detection_id: 89819aa4-bbd6-46bc-88ec-c7f7fe30efa6
+detection_category: Sigma
+detection_type: host
+contributors:
+    - SecurityOnionSolutions
+created: "2025-09-29"
+questions:
+    - question_id: PS004
+      question: What specific PowerShell commandlets from the detection list were found in the script block content?
+      context: Identify which commandlets from PowerShell exploitation frameworks were executed to determine the scope of activity
+      range: +/-30m
+      query:
+        aggregation: false
+        detection:
+            condition: selection
+            selection:
+                EventID: 4104
+                hostname: '{event_data.host.name}'
+        fields:
+            - ScriptBlockText
+            - Path
+            - User
+            - ProcessId
+        logsource:
+            definition: Microsoft-Windows-PowerShell/Operational
+            service: powershell
+    - question_id: PS001
+      question: What were the full PowerShell command lines that contained the detected commandlet names?
+      context: Analyze complete command context to understand if the commandlets are part of legitimate administration or unauthorized activity
+      range: +/-30m
+      query:
+        aggregation: false
+        detection:
+            condition: selection
+            selection:
+                Image|endswith:
+                    - \powershell.exe
+                    - \pwsh.exe
+                hostname: '{event_data.host.name}'
+        fields:
+            - CommandLine
+            - User
+            - ProcessGuid
+            - ParentImage
+        logsource:
+            category: process_creation
+    - question_id: PS007
+      question: Do the detected commandlets match known PowerShell Empire, Cobalt Strike, or other post-exploitation framework patterns?
+      context: Determine if the commandlets are part of organized exploitation frameworks or standalone tools
+      range: +/-30m
+      query:
+        aggregation: false
+        detection:
+            condition: selection
+            selection:
+                CommandLine|contains:
+                    - powershell -W Hidden
+                    - Invoke-Shellcode
+                    - Invoke-Mimikatz
+                    - PowerView
+                Image|endswith:
+                    - \powershell.exe
+                    - \pwsh.exe
+                hostname: '{event_data.host.name}'
+        fields:
+            - CommandLine
+            - User
+            - ProcessGuid
+            - ParentImage
+        logsource:
+            category: process_creation
+    - question_id: PROC007
+      question: Did the detected commandlets attempt to access credentials, including LSASS, registry hives, or password files?
+      context: Evaluate if credential harvesting activities occurred using the detected PowerShell commandlets
+      range: +/-30m
+      query:
+        aggregation: false
+        detection:
+            condition: selection
+            selection:
+                TargetImage|endswith: \lsass.exe
+                event.outcome: failure
+                hostname: '{event_data.host.name}'
+        fields:
+            - SourceImage
+            - TargetImage
+            - GrantedAccess
+        logsource:
+            category: process_access
+    - question_id: PROC011
+      question: Which of the detected commandlets performed system or domain discovery functions?
+      context: Identify reconnaissance activities conducted through the PowerShell commandlets to assess information gathering scope
+      range: +/-1h
+      query:
+        aggregation: false
+        detection:
+            condition: selection and filter
+            filter:
+                hostname: '{event_data.host.name}'
+            selection:
+                Image|endswith:
+                    - \\net.exe
+                    - \\whoami.exe
+                    - \\ipconfig.exe
+                    - \\systeminfo.exe
+                    - \\tasklist.exe
+        fields:
+            - Image
+            - CommandLine
+            - User
+            - ParentImage
+            - ProcessGuid
+        logsource:
+            category: process_creation
+    - question_id: PROC006
+      question: Were privilege escalation commandlets detected, and did they result in elevated process execution?
+      context: Determine if commandlets like Invoke-BypassUAC or privilege escalation tools were used successfully
+      range: +/-1h
+      query:
+        aggregation: false
+        detection:
+            condition: selection and filter
+            filter:
+                hostname: '{event_data.host.name}'
+            selection:
+                CommandLine|contains:
+                    - runas
+                    - elevate
+                    - admin
+        fields:
+            - Image
+            - CommandLine
+            - User
+            - ParentImage
+            - ProcessGuid
+        logsource:
+            category: process_creation
+    - question_id: USER001
+      question: What user account executed the PowerShell session containing the detected commandlets and at what privilege level?
+      context: User context helps determine if the commandlet usage aligns with legitimate administrative duties
+      range: "0"
+      query:
+        aggregation: false
+        detection:
+            condition: selection
+            selection:
+                ProcessGuid: '{event_data.process.entity_id}'
+                hostname: '{event_data.host.name}'
+        fields:
+            - ProcessGuid
+            - ParentProcessGuid
+            - Image
+            - CommandLine
+            - timestamp
+        logsource:
+            category: process_creation
+    - question_id: HIST001
+      question: How frequently does this user or host execute PowerShell exploitation framework commandlets?
+      context: Historical analysis distinguishes between routine security testing and unexpected exploitation tool usage
+      range: -90d
+      query:
+        aggregation: true
+        detection:
+            condition: selection
+            selection:
+                User: '{event_data.user.name}'
+                hostname: '{event_data.host.name}'
+        fields:
+            - Image
+            - User
+            - CommandLine
+        logsource:
+            category: process_creation
+    - question_id: HIST002
+      question: Has this host previously executed similar PowerShell exploitation commandlets?
+      context: Previous detections may indicate ongoing security testing, persistent access, or repeated unauthorized activity
+      range: -30d
+      query:
+        aggregation: true
+        detection:
+            condition: selection
+            selection:
+                Image: '{event_data.process.executable}'
+                hostname: '{event_data.host.name}'
+        fields:
+            - hostname
+            - Image
+            - CommandLine
+            - User
+            - timestamp
+        logsource:
+            category: process_creation
+    - question_id: HUNT001
+      question: Are similar PowerShell exploitation commandlets being executed on other hosts in the network?
+      context: Network-wide analysis reveals if this is isolated activity or part of broader security operations or unauthorized access
+      range: -7d
+      query:
+        aggregation: true
+        detection:
+            condition: selection and not host_filter
+            host_filter:
+                hostname: '{event_data.host.name}'
+            selection:
+                dst_ip: '{destination.ip}'
+                rule.category|contains:
+                    - MALWARE
+                    - C2
+                    - EXPLOIT
+                src_ip: '{source.ip}'
+        fields:
+            - hostname
+            - src_ip
+            - dst_ip
+            - rule.name
+            - rule.category
+        logsource:
+            category: alert
+    - question_id: FILE010
+      question: Did the detected commandlets create output files containing system information or credentials?
+      context: File artifacts from reconnaissance commandlets indicate data collection activities and potential information gathering
+      range: +10m
+      query: discovery_output_files
+    - question_id: PS010
+      question: What PowerShell modules were imported alongside the detected exploitation commandlets?
+      context: Module analysis reveals the complete toolkit being utilized and helps identify the source framework or toolset
+      range: +/-30m
+      query:
+        aggregation: false
+        detection:
+            condition: selection
+            selection:
+                EventID: 4103
+                hostname: '{event_data.host.name}'
+        fields:
+            - ModuleName
+            - CommandName
+            - User
+            - ProcessId
+        logsource:
+            definition: Microsoft-Windows-PowerShell/Operational
+            service: powershell

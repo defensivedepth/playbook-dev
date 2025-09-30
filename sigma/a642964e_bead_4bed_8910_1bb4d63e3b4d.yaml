@@ -1,0 +1,244 @@
+name: HackTool - Mimikatz Execution
+id: 0
+description: Detection triggered on execution of mimikatz, a well-known credential extraction tool, based on command line arguments containing tool names (mimikatz, DumpCreds) or specific module functions. The detection identifies various mimikatz modules including sekurlsa::, lsadump::, kerberos::, and other functions targeting credential stores and authentication mechanisms. Investigation should focus on determining whether this represents authorized security testing, administrative activity, or unauthorized credential harvesting.
+type: detection
+detection_id: a642964e-bead-4bed-8910-1bb4d63e3b4d
+detection_category: Sigma
+detection_type: host
+contributors:
+    - SecurityOnionSolutions
+created: "2025-09-29"
+questions:
+    - question_id: PROC007
+      question: Were there attempts to access LSASS memory, credential stores, or other authentication mechanisms during mimikatz execution?
+      context: 'Mimikatz modules like sekurlsa:: and lsadump:: directly target credential stores and memory regions containing authentication data.'
+      range: +/-30m
+      query:
+        aggregation: false
+        detection:
+            condition: selection
+            selection:
+                TargetImage|endswith: \lsass.exe
+                event.outcome: failure
+                hostname: '{event_data.host.name}'
+        fields:
+            - SourceImage
+            - TargetImage
+            - GrantedAccess
+        logsource:
+            category: process_access
+    - question_id: PROC004
+      question: What specific mimikatz command line arguments and module functions were executed?
+      context: Command line analysis reveals which mimikatz modules (sekurlsa::, lsadump::, kerberos::, etc.) were invoked and their intended purpose.
+      range: +/-15m
+      query:
+        aggregation: false
+        detection:
+            condition: selection or parent
+            parent:
+                ParentProcessGuid: '{event_data.process.entity_id}'
+            selection:
+                ProcessGuid: '{event_data.process.entity_id}'
+        fields:
+            - Image
+            - CommandLine
+            - User
+            - ParentImage
+            - ProcessGuid
+        logsource:
+            category: process_creation
+    - question_id: PROC013
+      question: What is the parent-child process relationship for the mimikatz execution?
+      context: Process genealogy helps determine how mimikatz was launched and identifies potential staging or delivery mechanisms.
+      range: +/-1h
+      query:
+        aggregation: false
+        detection:
+            condition: selection or parent
+            parent:
+                ParentProcessGuid: '{event_data.process.entity_id}'
+            selection:
+                ProcessGuid: '{event_data.process.entity_id}'
+        fields:
+            - Image
+            - ParentImage
+            - CommandLine
+        logsource:
+            category: process_creation
+    - question_id: PROC014
+      question: What is the complete process chain leading to mimikatz execution using ProcessGuid correlation?
+      context: ProcessGuid provides accurate parent-child relationships to trace the full execution path of mimikatz deployment.
+      range: +/-2h
+      query:
+        aggregation: false
+        detection:
+            condition: selection or parent
+            parent:
+                ParentProcessGuid: '{event_data.process.entity_id}'
+            selection:
+                ProcessGuid: '{event_data.process.entity_id}'
+        fields:
+            - Image
+            - CommandLine
+        logsource:
+            category: process_creation
+    - question_id: PROC021
+      question: Did the mimikatz process spawn any child processes or additional tools?
+      context: Child processes reveal whether mimikatz was used as part of a larger tool chain or automated framework execution.
+      range: +5m
+      query:
+        aggregation: false
+        detection:
+            condition: selection or parent
+            parent:
+                ParentProcessGuid: '{event_data.process.entity_id}'
+            selection:
+                ProcessGuid: '{event_data.process.entity_id}'
+        fields:
+            - Image
+            - CommandLine
+        logsource:
+            category: process_creation
+    - question_id: USER001
+      question: What is the integrity level and logon type of the user context running mimikatz?
+      context: Understanding privilege context determines if mimikatz had sufficient rights for credential extraction operations.
+      range: "0"
+      query:
+        aggregation: false
+        detection:
+            condition: selection
+            selection:
+                ProcessGuid: '{event_data.process.entity_id}'
+                hostname: '{event_data.host.name}'
+        fields:
+            - ProcessGuid
+            - ParentProcessGuid
+            - Image
+            - CommandLine
+            - timestamp
+        logsource:
+            category: process_creation
+    - question_id: NET002
+      question: What DNS queries were made by this host before and after mimikatz execution?
+      context: DNS patterns may reveal command and control infrastructure or data exfiltration destinations following credential harvesting.
+      range: +/-30m
+      query:
+        aggregation: false
+        detection:
+            condition: selection
+            selection:
+                hostname: '{event_data.host.name}'
+        fields:
+            - dns.query.name
+            - dns.resolved_ip
+            - process.name
+            - timestamp
+        logsource:
+            category: dns
+    - question_id: UNI001
+      question: What network connections were initiated by or around the time of mimikatz execution?
+      context: Network activity context helps determine if mimikatz was part of remote operations or data exfiltration activities.
+      range: +/-30m
+      query:
+        aggregation: false
+        detection:
+            condition: selection and filter
+            filter:
+                hostname: '{event_data.host.name}'
+            selection: null
+        fields:
+            - process.name
+            - process.pid
+            - process.command_line
+            - dst_ip
+            - dst_port
+        logsource:
+            category: network
+            product: windows
+    - question_id: HIST001
+      question: What is the baseline frequency of mimikatz or DumpCreds activity for this user and host?
+      context: Historical patterns help distinguish legitimate security testing or administrative activity from unauthorized credential harvesting.
+      range: -90d
+      query:
+        aggregation: true
+        detection:
+            condition: selection
+            selection:
+                User: '{event_data.user.name}'
+                hostname: '{event_data.host.name}'
+        fields:
+            - Image
+            - User
+            - CommandLine
+        logsource:
+            category: process_creation
+    - question_id: HIST002
+      question: Has this host shown previous instances of mimikatz execution or credential dumping tools?
+      context: Repeated credential dumping patterns indicate persistent access requiring comprehensive investigation.
+      range: -30d
+      query:
+        aggregation: true
+        detection:
+            condition: selection
+            selection:
+                Image: '{event_data.process.executable}'
+                hostname: '{event_data.host.name}'
+        fields:
+            - hostname
+            - Image
+            - CommandLine
+            - User
+            - timestamp
+        logsource:
+            category: process_creation
+    - question_id: HUNT004
+      question: What other hosts have executed mimikatz or similar credential dumping commands in the past 24 hours?
+      context: Recent network-wide mimikatz activity reveals coordinated operations or authorized security testing campaigns.
+      range: -24h
+      query:
+        aggregation: false
+        detection:
+            condition: selection and not host_filter
+            filter:
+                hostname: '{event_data.host.name}'
+            host_filter:
+                hostname: '{event_data.host.name}'
+            selection: null
+        fields:
+            - Image
+            - CommandLine
+            - User
+            - ParentImage
+            - ProcessGuid
+        logsource:
+            category: process_creation
+    - question_id: STAG001
+      question: What other security tools or binaries were executed from the same directory as mimikatz?
+      context: Tool staging directories often contain multiple post-exploitation utilities deployed together for operational efficiency.
+      range: +/-20m
+      query: tool_staging_analysis
+    - question_id: PS007
+      question: Were PowerShell Empire, Cobalt Strike, or other framework patterns detected alongside mimikatz execution?
+      context: Post-exploitation frameworks commonly integrate mimikatz functionality for credential harvesting operations.
+      range: +/-30m
+      query:
+        aggregation: false
+        detection:
+            condition: selection
+            selection:
+                CommandLine|contains:
+                    - powershell -W Hidden
+                    - Invoke-Shellcode
+                    - Invoke-Mimikatz
+                    - PowerView
+                Image|endswith:
+                    - \powershell.exe
+                    - \pwsh.exe
+                hostname: '{event_data.host.name}'
+        fields:
+            - CommandLine
+            - User
+            - ProcessGuid
+            - ParentImage
+        logsource:
+            category: process_creation

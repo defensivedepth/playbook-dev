@@ -1,0 +1,221 @@
+name: Copying Sensitive Files with Credential Data
+id: 0
+description: This detection identified the copying of sensitive files containing credential data, including Windows registry hives (SAM, SECURITY, SYSTEM) or Active Directory database files (NTDS.dit). The activity involved either esentutl.exe execution with specific parameters or direct access to credential store file paths. Investigation should focus on determining whether this represents legitimate administrative backup operations or unauthorized credential harvesting attempts.
+type: detection
+detection_id: e7be6119-fc37-43f0-ad4f-1f3f99be2f9f
+detection_category: Sigma
+detection_type: host
+contributors:
+    - SecurityOnionSolutions
+created: "2025-09-29"
+questions:
+    - question_id: PROC020
+      question: What was the full command executed including all esentutl.exe parameters and target file paths?
+      context: Complete command line reveals specific files being copied and extraction methods, helping determine if this is legitimate administrative activity or unauthorized credential harvesting
+      range: ""
+      query:
+        aggregation: false
+        detection:
+            condition: selection or parent
+            parent:
+                ParentProcessGuid: '{event_data.process.entity_id}'
+            selection:
+                ProcessGuid: '{event_data.process.entity_id}'
+        fields:
+            - Image
+            - CommandLine
+        logsource:
+            category: process_creation
+    - question_id: PROC013
+      question: What is the parent process that initiated this esentutl.exe execution or sensitive file copying operation?
+      context: Parent process identification helps distinguish legitimate administrative tools from unauthorized credential dumping attempts
+      range: +/-1h
+      query:
+        aggregation: false
+        detection:
+            condition: selection or parent
+            parent:
+                ParentProcessGuid: '{event_data.process.entity_id}'
+            selection:
+                ProcessGuid: '{event_data.process.entity_id}'
+        fields:
+            - Image
+            - ParentImage
+            - CommandLine
+        logsource:
+            category: process_creation
+    - question_id: PROC014
+      question: What is the complete process chain leading to the sensitive file copying operation using ProcessGuid correlation?
+      context: ProcessGuid correlation reveals the full execution sequence leading to credential file access attempts
+      range: +/-2h
+      query:
+        aggregation: false
+        detection:
+            condition: selection or parent
+            parent:
+                ParentProcessGuid: '{event_data.process.entity_id}'
+            selection:
+                ProcessGuid: '{event_data.process.entity_id}'
+        fields:
+            - Image
+            - CommandLine
+        logsource:
+            category: process_creation
+    - question_id: PROC021
+      question: Did the esentutl.exe process or file copying operation spawn any child processes for further credential processing?
+      context: Child processes indicate whether copied credential files are being processed, parsed, or transmitted elsewhere
+      range: +5m
+      query:
+        aggregation: false
+        detection:
+            condition: selection or parent
+            parent:
+                ParentProcessGuid: '{event_data.process.entity_id}'
+            selection:
+                ProcessGuid: '{event_data.process.entity_id}'
+        fields:
+            - Image
+            - CommandLine
+        logsource:
+            category: process_creation
+    - question_id: PROC007
+      question: Were there concurrent attempts to access NTDS.dit, SAM, SECURITY, or SYSTEM registry hives beyond this detection?
+      context: Multiple credential store access attempts indicate systematic credential harvesting versus isolated administrative activity
+      range: +/-30m
+      query:
+        aggregation: false
+        detection:
+            condition: selection
+            selection:
+                TargetImage|endswith: \lsass.exe
+                event.outcome: failure
+                hostname: '{event_data.host.name}'
+        fields:
+            - SourceImage
+            - TargetImage
+            - GrantedAccess
+        logsource:
+            category: process_access
+    - question_id: USER001
+      question: What is the integrity level and logon type of the process copying sensitive credential files?
+      context: Administrative privilege context helps determine if this access is authorized system maintenance or unauthorized credential extraction
+      range: "0"
+      query:
+        aggregation: false
+        detection:
+            condition: selection
+            selection:
+                ProcessGuid: '{event_data.process.entity_id}'
+                hostname: '{event_data.host.name}'
+        fields:
+            - ProcessGuid
+            - ParentProcessGuid
+            - Image
+            - CommandLine
+            - timestamp
+        logsource:
+            category: process_creation
+    - question_id: HIST001
+      question: What is the baseline frequency of esentutl.exe usage and sensitive file access for this user and host?
+      context: Historical patterns distinguish routine database maintenance from unusual credential file access
+      range: -90d
+      query:
+        aggregation: true
+        detection:
+            condition: selection
+            selection:
+                User: '{event_data.user.name}'
+                hostname: '{event_data.host.name}'
+        fields:
+            - Image
+            - User
+            - CommandLine
+        logsource:
+            category: process_creation
+    - question_id: HIST002
+      question: Has this host shown previous instances of credential file copying or NTDS.dit access attempts?
+      context: Previous credential access patterns indicate whether this is part of ongoing administrative work or repeated unauthorized activity
+      range: -30d
+      query:
+        aggregation: true
+        detection:
+            condition: selection
+            selection:
+                Image: '{event_data.process.executable}'
+                hostname: '{event_data.host.name}'
+        fields:
+            - hostname
+            - Image
+            - CommandLine
+            - User
+            - timestamp
+        logsource:
+            category: process_creation
+    - question_id: HUNT001
+      question: What other hosts on the network have accessed NTDS.dit, SAM, or registry credential stores recently?
+      context: Network-wide credential access patterns reveal whether this is coordinated administrative activity or widespread credential harvesting
+      range: -7d
+      query:
+        aggregation: true
+        detection:
+            condition: selection and not host_filter
+            host_filter:
+                hostname: '{event_data.host.name}'
+            selection:
+                dst_ip: '{destination.ip}'
+                rule.category|contains:
+                    - MALWARE
+                    - C2
+                    - EXPLOIT
+                src_ip: '{source.ip}'
+        fields:
+            - hostname
+            - src_ip
+            - dst_ip
+            - rule.name
+            - rule.category
+        logsource:
+            category: alert
+    - question_id: HUNT004
+      question: What other hosts have executed esentutl.exe with similar parameters in the past 24 hours?
+      context: Recent network activity helps distinguish scheduled maintenance operations from coordinated credential extraction campaigns
+      range: -24h
+      query:
+        aggregation: false
+        detection:
+            condition: selection and not host_filter
+            filter:
+                hostname: '{event_data.host.name}'
+            host_filter:
+                hostname: '{event_data.host.name}'
+            selection: null
+        fields:
+            - Image
+            - CommandLine
+            - User
+            - ParentImage
+            - ProcessGuid
+        logsource:
+            category: process_creation
+    - question_id: NET002
+      question: What DNS queries and network connections occurred before and after the sensitive file copying operation?
+      context: Network activity patterns help determine if copied credential files are being exfiltrated or processed locally for legitimate purposes
+      range: +/-30m
+      query:
+        aggregation: false
+        detection:
+            condition: selection
+            selection:
+                hostname: '{event_data.host.name}'
+        fields:
+            - dns.query.name
+            - dns.resolved_ip
+            - process.name
+            - timestamp
+        logsource:
+            category: dns
+    - question_id: STAG001
+      question: What other processes executed from the same directory as the credential file copying operation?
+      context: Co-located tools indicate whether this is part of a legitimate administrative toolkit or unauthorized credential processing suite
+      range: +/-20m
+      query: tool_staging_analysis

@@ -1,0 +1,223 @@
+name: Process Memory Dump Via Comsvcs.DLL
+id: 0
+description: This detection identified the use of rundll32.exe with comsvcs.dll to perform process memory dumps, a technique that can extract credentials from system memory. The activity used specific ordinals or function names to invoke memory dumping capabilities through Windows' Component Services DLL. Investigation should focus on determining the target process, user context, and whether this represents legitimate system administration or unauthorized credential access.
+type: detection
+detection_id: 646ea171-dded-4578-8a4d-65e9822892e3
+detection_category: Sigma
+detection_type: host
+contributors:
+    - SecurityOnionSolutions
+created: "2025-09-29"
+questions:
+    - question_id: PROC007
+      question: Was LSASS targeted by this rundll32 comsvcs.dll memory dump operation?
+      context: Memory dumps of LSASS process indicate attempts to extract stored credentials from system memory.
+      range: +/-30m
+      query:
+        aggregation: false
+        detection:
+            condition: selection
+            selection:
+                TargetImage|endswith: \lsass.exe
+                event.outcome: failure
+                hostname: '{event_data.host.name}'
+        fields:
+            - SourceImage
+            - TargetImage
+            - GrantedAccess
+        logsource:
+            category: process_access
+    - question_id: PROC013
+      question: What process spawned rundll32.exe with the comsvcs.dll parameters?
+      context: Parent process context helps determine if the memory dump was initiated through legitimate administrative tools or other means.
+      range: +/-1h
+      query:
+        aggregation: false
+        detection:
+            condition: selection or parent
+            parent:
+                ParentProcessGuid: '{event_data.process.entity_id}'
+            selection:
+                ProcessGuid: '{event_data.process.entity_id}'
+        fields:
+            - Image
+            - ParentImage
+            - CommandLine
+        logsource:
+            category: process_creation
+    - question_id: PROC020
+      question: What was the complete rundll32 command line including the specific comsvcs.dll ordinal and target process?
+      context: Full command parameters reveal the target process ID, dump file location, and specific technique used for memory extraction.
+      range: ""
+      query:
+        aggregation: false
+        detection:
+            condition: selection or parent
+            parent:
+                ParentProcessGuid: '{event_data.process.entity_id}'
+            selection:
+                ProcessGuid: '{event_data.process.entity_id}'
+        fields:
+            - Image
+            - CommandLine
+        logsource:
+            category: process_creation
+    - question_id: PROC021
+      question: Did rundll32.exe spawn any processes after executing the comsvcs.dll memory dump?
+      context: Post-execution activity may indicate additional credential processing or data handling operations.
+      range: +5m
+      query:
+        aggregation: false
+        detection:
+            condition: selection or parent
+            parent:
+                ParentProcessGuid: '{event_data.process.entity_id}'
+            selection:
+                ProcessGuid: '{event_data.process.entity_id}'
+        fields:
+            - Image
+            - CommandLine
+        logsource:
+            category: process_creation
+    - question_id: FILE006
+      question: Were memory dump files (.dmp) created and subsequently archived or compressed?
+      context: Archive creation of dump files suggests preparation for exfiltration or offline credential analysis.
+      range: +/-1h
+      query:
+        aggregation: false
+        detection:
+            condition: selection
+            selection:
+                TargetFilename|endswith:
+                    - .zip
+                    - .rar
+                    - .7z
+                    - .tar
+                    - .gz
+                hostname: '{event_data.host.name}'
+        fields:
+            - TargetFilename
+            - Image
+            - User
+            - ProcessGuid
+            - file.size
+        logsource:
+            category: file_event
+    - question_id: FILE009
+      question: What are the hash values and digital signatures of the rundll32.exe binary and any created dump files?
+      context: Binary verification ensures legitimate system tools weren't replaced and enables correlation with known credential dumping campaigns.
+      range: -10m
+      query:
+        aggregation: false
+        detection:
+            condition: selection
+            selection:
+                TargetFilename: '{event_data.process.executable}'
+                hostname: '{event_data.host.name}'
+        fields:
+            - TargetFilename
+            - Hashes
+            - Signed
+            - SignatureStatus
+            - Subject
+        logsource:
+            category: file_event
+    - question_id: NET002
+      question: What DNS queries occurred around the time of the comsvcs.dll memory dump execution?
+      context: DNS activity may reveal command and control infrastructure used for receiving exfiltrated credential data.
+      range: +/-30m
+      query:
+        aggregation: false
+        detection:
+            condition: selection
+            selection:
+                hostname: '{event_data.host.name}'
+        fields:
+            - dns.query.name
+            - dns.resolved_ip
+            - process.name
+            - timestamp
+        logsource:
+            category: dns
+    - question_id: UNI001
+      question: What network connections were established during or after the rundll32 comsvcs.dll execution?
+      context: Network activity context determines if dumped credentials were transmitted externally or processed locally.
+      range: +/-30m
+      query:
+        aggregation: false
+        detection:
+            condition: selection and filter
+            filter:
+                hostname: '{event_data.host.name}'
+            selection: null
+        fields:
+            - process.name
+            - process.pid
+            - process.command_line
+            - dst_ip
+            - dst_port
+        logsource:
+            category: network
+            product: windows
+    - question_id: USER001
+      question: What user account and privilege level executed the rundll32 comsvcs.dll memory dump?
+      context: Administrative privileges are required for memory dumping, indicating either legitimate system administration or privilege escalation.
+      range: "0"
+      query:
+        aggregation: false
+        detection:
+            condition: selection
+            selection:
+                ProcessGuid: '{event_data.process.entity_id}'
+                hostname: '{event_data.host.name}'
+        fields:
+            - ProcessGuid
+            - ParentProcessGuid
+            - Image
+            - CommandLine
+            - timestamp
+        logsource:
+            category: process_creation
+    - question_id: HIST001
+      question: How frequently does this user account perform memory dumps using comsvcs.dll?
+      context: Historical usage patterns help distinguish routine system administration from unusual credential access attempts.
+      range: -90d
+      query:
+        aggregation: true
+        detection:
+            condition: selection
+            selection:
+                User: '{event_data.user.name}'
+                hostname: '{event_data.host.name}'
+        fields:
+            - Image
+            - User
+            - CommandLine
+        logsource:
+            category: process_creation
+    - question_id: HUNT004
+      question: Have other hosts executed rundll32 with comsvcs.dll parameters in the past 24 hours?
+      context: Network-wide comsvcs.dll usage reveals coordinated credential harvesting campaigns or standard administrative procedures.
+      range: -24h
+      query:
+        aggregation: false
+        detection:
+            condition: selection and not host_filter
+            filter:
+                hostname: '{event_data.host.name}'
+            host_filter:
+                hostname: '{event_data.host.name}'
+            selection: null
+        fields:
+            - Image
+            - CommandLine
+            - User
+            - ParentImage
+            - ProcessGuid
+        logsource:
+            category: process_creation
+    - question_id: STAG001
+      question: What other executables ran from the same directory as the rundll32 process?
+      context: Co-located tools often indicate staged credential dumping toolkits or legitimate administrative script collections.
+      range: +/-20m
+      query: tool_staging_analysis
