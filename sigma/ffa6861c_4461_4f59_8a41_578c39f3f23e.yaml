@@ -1,17 +1,17 @@
 name: LSASS Dump Keyword In CommandLine
-id: 89341138
-description: This detection identified command line activity containing keywords associated with LSASS memory dumping, including specific file extensions and tool names commonly used for credential extraction. The detection triggers on various patterns including explicit LSASS dump file names, compressed archives that may contain dumps, and specific dumping tools like nanodump or SQLDmpr. Investigation should focus on determining whether this activity represents legitimate administrative or security testing versus unauthorized credential access attempts.
+id: 47110830
+description: This detection identified command line execution containing keywords associated with LSASS memory dumping, including specific dump file names and tool signatures. The activity involves potential access to the Local Security Authority Subsystem Service (LSASS) process memory, which contains cached user credentials and authentication tokens. Investigation should focus on determining whether this represents legitimate administrative memory analysis or unauthorized credential access attempts.
 type: detection
 detection_id: ffa6861c-4461-4f59-8a41-578c39f3f23e
 detection_category: ""
 detection_type: sigma
 contributors:
     - SecurityOnionSolutions
-created: "2025-09-30T10:23:17-04:00"
+created: "2025-09-30T11:05:40-04:00"
 questions:
     - question_id: PROC007
-      question: Were there any attempts to access LSASS process memory or create memory dumps?
-      context: LSASS memory dumps contain Windows authentication credentials and are commonly targeted for credential harvesting.
+      question: Were there additional attempts to access LSASS process memory or create memory dumps beyond this detected command?
+      context: Multiple LSASS access attempts may indicate systematic credential harvesting operations requiring investigation.
       range: +/-30m
       query: |
         aggregation: false
@@ -28,8 +28,8 @@ questions:
         logsource:
             category: process_access
     - question_id: PROC020
-      question: What was the complete command line that contained the LSASS dump keywords including all parameters and file paths?
-      context: Full command analysis reveals the specific dumping technique, target file location, and potential evasion methods used.
+      question: What was the complete command line that triggered this LSASS dump detection including all file paths and parameters?
+      context: Full command details reveal the specific dumping technique used and target file locations for LSASS memory extraction.
       query: |
         aggregation: false
         detection:
@@ -44,8 +44,8 @@ questions:
         logsource:
             category: process_creation
     - question_id: PROC013
-      question: What process executed the command containing LSASS dump keywords and what was its parent process?
-      context: Parent-child relationship helps identify if the LSASS dumping command originated from legitimate administrative tools or unauthorized processes.
+      question: What process spawned the command containing LSASS dump keywords and what was its execution chain?
+      context: Parent process context helps determine if LSASS dumping originated from legitimate administrative tools or unauthorized execution.
       range: +/-1h
       query: |
         aggregation: false
@@ -62,8 +62,8 @@ questions:
         logsource:
             category: process_creation
     - question_id: PROC021
-      question: Did the process that executed the LSASS dump command spawn any child processes for data handling or cleanup?
-      context: Child processes may indicate additional activities like file compression, encryption, or deletion of evidence after credential dumping.
+      question: Did the process executing the LSASS dump command spawn additional processes for credential extraction or data handling?
+      context: Child processes may reveal post-dump processing activities such as credential parsing or data staging operations.
       range: +5m
       query: |
         aggregation: false
@@ -79,8 +79,8 @@ questions:
         logsource:
             category: process_creation
     - question_id: FILE006
-      question: Were any .dmp, .zip, or .rar files created that could contain LSASS memory dumps?
-      context: Archive files containing LSASS dumps indicate potential credential theft preparation for exfiltration.
+      question: Were dump files with names like lsass.dmp, lsass.zip, Andrew.dmp, or other detected variants actually created on disk?
+      context: Confirming file creation validates successful LSASS memory extraction and identifies staging locations for investigation.
       range: +/-1h
       query: |
         aggregation: false
@@ -103,8 +103,8 @@ questions:
         logsource:
             category: file_event
     - question_id: FILE009
-      question: What are the hash values and digital signatures of any dump files or tools involved in the LSASS dumping activity?
-      context: File hashing helps identify known credential dumping tools and correlate with threat intelligence indicators.
+      question: What are the hash values and digital signatures of any created LSASS dump files or associated executables?
+      context: Hash analysis enables correlation with known dumping tools like procdump, nanodump, or custom LSASS extraction utilities.
       range: -10m
       query: |
         aggregation: false
@@ -122,8 +122,8 @@ questions:
         logsource:
             category: file_event
     - question_id: USER001
-      question: What user account executed the LSASS dump command and what were their privilege levels?
-      context: LSASS dumping typically requires elevated privileges, helping determine if proper administrative access was used.
+      question: What user account and privilege level was used to execute the LSASS dump command?
+      context: LSASS dumping typically requires elevated privileges, revealing account compromise or legitimate administrative activity context.
       range: "0"
       query: |
         aggregation: false
@@ -141,8 +141,8 @@ questions:
         logsource:
             category: process_creation
     - question_id: NET002
-      question: What DNS queries occurred around the time of LSASS dumping activity on this host?
-      context: DNS activity may reveal communication with command and control infrastructure or download of dumping tools.
+      question: What DNS queries were made before or after the LSASS dump command execution?
+      context: DNS activity may reveal tool downloads, command and control communications, or data exfiltration staging related to credential access.
       range: +/-30m
       query: |
         aggregation: false
@@ -158,16 +158,15 @@ questions:
         logsource:
             category: dns
     - question_id: UNI001
-      question: Were there any network connections established before, during, or after the LSASS dump command execution?
-      context: Network activity context helps determine if credentials were potentially exfiltrated or if tools were downloaded remotely.
+      question: What network connections were established around the time of LSASS dump command execution?
+      context: Network activity context helps distinguish between local administrative dumping and potential credential theft with remote exfiltration.
       range: +/-30m
       query: |
         aggregation: false
         detection:
-            condition: selection and filter
-            filter:
+            condition: selection
+            selection:
                 hostname: '{event_data.host.name}'
-            selection: null
         fields:
             - process.name
             - process.pid
@@ -178,8 +177,8 @@ questions:
             category: network
             product: windows
     - question_id: HIST001
-      question: How frequently does this user or host perform LSASS memory dumping activities?
-      context: Historical baseline helps distinguish legitimate security testing or debugging from unauthorized credential access attempts.
+      question: What is the historical frequency of LSASS dump commands or memory access for this user and system?
+      context: Baseline analysis helps differentiate routine administrative memory dumps from unusual credential access attempts.
       range: -90d
       query: |
         aggregation: true
@@ -195,8 +194,8 @@ questions:
         logsource:
             category: process_creation
     - question_id: HUNT004
-      question: Have other hosts in the environment executed similar LSASS dumping commands recently?
-      context: Network-wide LSASS dumping patterns may indicate coordinated credential harvesting activities or legitimate security assessments.
+      question: Have other systems executed similar LSASS dump commands with matching keywords in recent timeframes?
+      context: Cross-system correlation reveals whether this represents isolated administrative activity or broader credential harvesting operations.
       range: -24h
       query: |
         aggregation: false
@@ -206,7 +205,8 @@ questions:
                 hostname: '{event_data.host.name}'
             host_filter:
                 hostname: '{event_data.host.name}'
-            selection: null
+            selection:
+                Image: '{event_data.process.executable}'
         fields:
             - Image
             - CommandLine
@@ -216,8 +216,45 @@ questions:
         logsource:
             category: process_creation
     - question_id: STAG001
-      question: What other executables or tools were present in the same directory as the process that performed LSASS dumping?
-      context: Co-located tools may indicate a credential dumping toolkit or legitimate administrative utilities used together.
+      question: What other executables or scripts were present in the same directory as the process that executed the LSASS dump command?
+      context: Co-located files may include additional credential access tools, post-exploitation utilities, or legitimate administrative toolsets.
       range: +/-20m
       query: |
-        tool_staging_analysis
+        aggregation: true
+        detection:
+            condition: selection and same_directory
+            same_directory:
+                CurrentDirectory: '{event_data.process.working_directory}'
+            selection:
+                hostname: '{event_data.host.name}'
+        fields:
+            - Image
+            - CommandLine
+            - User
+            - CreationUtcTime
+        logsource:
+            category: process_creation
+    - question_id: REG004
+      question: Were registry modifications made to bypass Windows Defender or disable process protection around LSASS dump execution?
+      context: Registry changes may indicate attempts to disable security controls specifically to enable LSASS memory access and dumping.
+      range: +/-1h
+      query: |
+        aggregation: false
+        detection:
+            condition: selection
+            selection:
+                TargetObject|contains:
+                    - Windows Defender
+                    - UAC
+                    - Audit
+                    - Firewall
+                    - DisableAntiSpyware
+                hostname: '{event_data.host.name}'
+        fields:
+            - TargetObject
+            - Details
+            - Image
+            - User
+            - ProcessGuid
+        logsource:
+            category: registry_event
