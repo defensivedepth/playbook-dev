@@ -1,10 +1,10 @@
 name: Copying Sensitive Files with Credential Data
-id: 0
+id: 200
 description: This detection identified the copying of sensitive files containing credential data, including Windows registry hives (SAM, SECURITY, SYSTEM) or Active Directory database files (NTDS.dit). The activity involved either esentutl.exe execution with specific parameters or direct access to credential store file paths. Investigation should focus on determining whether this represents legitimate administrative backup operations or unauthorized credential harvesting attempts.
 type: detection
 detection_id: e7be6119-fc37-43f0-ad4f-1f3f99be2f9f
-detection_category: Sigma
-detection_type: host
+detection_category: ''
+detection_type: sigma
 contributors:
     - SecurityOnionSolutions
 created: "2025-09-29"

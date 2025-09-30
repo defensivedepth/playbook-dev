@@ -1,10 +1,10 @@
 name: Malicious PowerShell Commandlets - ScriptBlock
-id: 0
+id: 5068
 description: PowerShell script execution was detected containing commandlets from well-known exploitation frameworks including PowerShell Empire, Mimikatz, PowerSploit, and other post-exploitation tools. These commandlets are commonly used for credential harvesting, privilege escalation, system discovery, and persistence mechanisms. The detection requires investigation to determine if this represents authorized security testing, legitimate administrative activity, or unauthorized tool usage.
 type: detection
 detection_id: 89819aa4-bbd6-46bc-88ec-c7f7fe30efa6
-detection_category: Sigma
-detection_type: host
+detection_category: ''
+detection_type: sigma
 contributors:
     - SecurityOnionSolutions
 created: "2025-09-29"

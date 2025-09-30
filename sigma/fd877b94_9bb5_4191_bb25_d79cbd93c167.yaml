@@ -1,10 +1,10 @@
 name: Dumping of Sensitive Hives Via Reg.EXE
-id: 0
+id: 234521345
 description: Detection of reg.exe being used to export or save sensitive Windows registry hives including SAM, SYSTEM, and SECURITY. These registry hives contain critical authentication data including password hashes and system secrets. While this activity can be legitimate for system backup or forensic purposes, it represents a common technique for credential harvesting.
 type: detection
 detection_id: fd877b94-9bb5-4191-bb25-d79cbd93c167
-detection_category: Sigma
-detection_type: host
+detection_category: ''
+detection_type: sigma
 contributors:
     - SecurityOnionSolutions
 created: "2025-09-29"

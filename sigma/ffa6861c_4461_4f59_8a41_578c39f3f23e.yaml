@@ -1,10 +1,10 @@
 name: LSASS Dump Keyword In CommandLine
-id: 0
+id: 2345345345
 description: This detection identified command line execution containing keywords associated with LSASS memory dumping, including specific dump file names and memory dump utilities. LSASS dumps can contain cached credentials and authentication tokens that may be extracted for credential access purposes. Investigation should determine whether this activity represents legitimate administrative memory analysis or unauthorized credential harvesting attempts.
 type: detection
 detection_id: ffa6861c-4461-4f59-8a41-578c39f3f23e
-detection_category: Sigma
-detection_type: host
+detection_category: ''
+detection_type: sigma
 contributors:
     - SecurityOnionSolutions
 created: "2025-09-29"

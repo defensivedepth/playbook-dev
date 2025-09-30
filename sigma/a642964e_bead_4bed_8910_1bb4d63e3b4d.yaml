@@ -1,10 +1,10 @@
 name: HackTool - Mimikatz Execution
-id: 0
+id: 8
 description: Detection triggered on execution of mimikatz, a well-known credential extraction tool, based on command line arguments containing tool names (mimikatz, DumpCreds) or specific module functions. The detection identifies various mimikatz modules including sekurlsa::, lsadump::, kerberos::, and other functions targeting credential stores and authentication mechanisms. Investigation should focus on determining whether this represents authorized security testing, administrative activity, or unauthorized credential harvesting.
 type: detection
 detection_id: a642964e-bead-4bed-8910-1bb4d63e3b4d
-detection_category: Sigma
-detection_type: host
+detection_category: ''
+detection_type: sigma
 contributors:
     - SecurityOnionSolutions
 created: "2025-09-29"

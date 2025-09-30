@@ -1,10 +1,10 @@
 name: PowerShell Get-Process LSASS
-id: 0
+id: 23452345
 description: This detection identifies PowerShell execution of Get-Process commands specifically targeting the LSASS (Local Security Authority Subsystem Service) process. The rule triggers on various Get-Process cmdlet aliases (Get-Process, ps, gps) when used to enumerate the LSASS process, which manages authentication and maintains security tokens on Windows systems. While legitimate administrative scripts may occasionally query LSASS status, this activity pattern frequently precedes credential harvesting techniques and warrants investigation to determine intent and context.
 type: detection
 detection_id: b2815d0d-7481-4bf0-9b6c-a4c48a94b349
-detection_category: Sigma
-detection_type: host
+detection_category: ''
+detection_type: sigma
 contributors:
     - SecurityOnionSolutions
 created: "2025-09-29"

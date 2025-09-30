@@ -1,10 +1,10 @@
 name: Process Memory Dump Via Comsvcs.DLL
-id: 0
+id: 5555
 description: This detection identified the use of rundll32.exe with comsvcs.dll to perform process memory dumps, a technique that can extract credentials from system memory. The activity used specific ordinals or function names to invoke memory dumping capabilities through Windows' Component Services DLL. Investigation should focus on determining the target process, user context, and whether this represents legitimate system administration or unauthorized credential access.
 type: detection
 detection_id: 646ea171-dded-4578-8a4d-65e9822892e3
-detection_category: Sigma
-detection_type: host
+detection_category: ''
+detection_type: sigma
 contributors:
     - SecurityOnionSolutions
 created: "2025-09-29"
