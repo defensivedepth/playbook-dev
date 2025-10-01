@@ -1,0 +1,201 @@
+name: GPL RPC portmap mountd request UDP
+id: 22100579
+description: |
+  This alert detects RPC portmap requests for the mountd (mount daemon) service via UDP on port 111. The RPC
+  portmapper is used to map RPC program numbers to network port numbers, and mountd manages NFS mount requests.
+  Organizations commonly use NFS and mountd for network file sharing in Unix/Linux environments. External RPC
+  portmap queries for mountd may indicate legitimate NFS access attempts, network mapping, or reconnaissance
+  activity targeting NFS infrastructure. Investigation should determine if the source is authorized and if the
+  NFS/mountd exposure is intended.
+type: detection
+detection_id: '2100579'
+detection_category: ''
+detection_type: nids
+contributors:
+- SecurityOnionSolutions
+created: 2025-10-01
+questions:
+- question: What external host sent the RPC portmap mountd request?
+  context: Identifies the source of the RPC query and establishes if it is a known or unknown external system.
+  range: +/-5m
+  query: |
+    aggregation: false
+    logsource:
+      category: network
+      service: connection
+    detection:
+      selection:
+        src_ip: '{source.ip}'
+        dst_ip: '{destination.ip}'
+        dst_port: 111
+      condition: selection
+    fields:
+      - src_ip
+      - dst_ip
+      - src_port
+      - dst_port
+      - network.transport
+- question: What is the baseline frequency of RPC portmap requests to this server?
+  context: Establishes normal access patterns for this RPC service over the past week.
+  range: -7d
+  query: |
+    aggregation: true
+    logsource:
+      category: network
+      service: connection
+    detection:
+      selection:
+        dst_ip: '{destination.ip}'
+        dst_port: 111
+      condition: selection
+    fields:
+      - src_ip
+      - dst_ip
+- question: Has this external source accessed other RPC or NFS-related services on this host?
+  context: Reveals if the source is making broader queries to RPC or NFS infrastructure.
+  range: -1h
+  query: |
+    aggregation: false
+    logsource:
+      category: network
+      service: connection
+    detection:
+      selection:
+        src_ip: '{source.ip}'
+        dst_ip: '{destination.ip}'
+        dst_port:
+          - 111
+          - 2049
+          - 32765
+          - 32766
+          - 32767
+      condition: selection
+    fields:
+      - src_ip
+      - dst_ip
+      - dst_port
+      - connection.state
+- question: What other services are exposed on this RPC server?
+  context: Identifies other services that may be vulnerable or indicate server purpose.
+  range: -24h
+  query: |
+    aggregation: false
+    logsource:
+      category: network
+      service: connection
+    detection:
+      selection:
+        src_ip: '{destination.ip}'
+      filter:
+        src_port: 111
+      condition: selection and not filter
+    fields:
+      - src_ip
+      - src_port
+      - dst_ip
+      - dst_port
+      - network.transport
+- question: Are there other RPC portmap or NFS-related alerts for this server?
+  context: Reveals additional detections that may indicate scanning or exploitation attempts.
+  range: -24h
+  query: |
+    aggregation: false
+    logsource:
+      category: alert
+    detection:
+      selection:
+        dst_ip: '{destination.ip}'
+        rule.category|contains:
+          - 'rpc'
+          - 'nfs'
+      filter:
+        document_id: '{soc_id}'
+      condition: selection and not filter
+    fields:
+      - src_ip
+      - dst_ip
+      - rule.name
+      - alert.severity_label
+- question: Has this external source targeted other internal hosts with RPC queries?
+  context: Determines if this is targeted activity or part of broader network scanning.
+  range: -1h
+  query: |
+    aggregation: false
+    logsource:
+      category: network
+      service: connection
+    detection:
+      selection:
+        src_ip: '{source.ip}'
+        dst_port: 111
+      filter:
+        dst_ip: '{destination.ip}'
+      condition: selection and not filter
+    fields:
+      - src_ip
+      - dst_ip
+      - dst_port
+      - connection.state
+- question: What other external connections has this RPC server accepted?
+  context: Reveals broader access patterns and potential exposure of the server.
+  range: -24h
+  query: |
+    aggregation: false
+    logsource:
+      category: network
+      service: connection
+    detection:
+      selection:
+        dst_ip: '{destination.ip}'
+      private_filter:
+        src_ip|cidr:
+          - "10.0.0.0/8"
+          - "172.16.0.0/12"
+          - "192.168.0.0/16"
+      condition: selection and not private_filter
+    fields:
+      - src_ip
+      - dst_ip
+      - dst_port
+      - connection.state
+- question: Are there reconnaissance or scanning alerts associated with this external source?
+  context: Identifies if the source is conducting broader reconnaissance beyond RPC services.
+  range: -24h
+  query: |
+    aggregation: false
+    logsource:
+      category: alert
+    detection:
+      selection:
+        src_ip: '{source.ip}'
+        rule.category|contains:
+          - 'scan'
+          - 'recon'
+      condition: selection
+    fields:
+      - src_ip
+      - dst_ip
+      - rule.name
+      - alert.severity_label
+- question: Has this RPC server made any outbound connections that could indicate compromise?
+  context: Detects unusual outbound activity that could suggest the server was exploited.
+  range: -24h
+  query: |
+    aggregation: false
+    logsource:
+      category: network
+      service: connection
+    detection:
+      selection:
+        src_ip: '{destination.ip}'
+      private_filter:
+        dst_ip|cidr:
+          - "10.0.0.0/8"
+          - "172.16.0.0/12"
+          - "192.168.0.0/16"
+      condition: selection and not private_filter
+    fields:
+      - src_ip
+      - dst_ip
+      - dst_port
+      - connection.state

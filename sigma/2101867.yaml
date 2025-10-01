@@ -1,0 +1,202 @@
+name: GPL RPC xdmcp info query
+id: 22101867
+description: |
+  This alert detects XDMCP (X Display Manager Control Protocol) information queries from external sources
+  to internal systems on UDP port 177. XDMCP is used to manage remote X Window System sessions and display
+  graphics from Unix/Linux servers to remote clients. Organizations may use XDMCP for legitimate remote
+  desktop access in Unix/Linux environments, though it is largely deprecated in favor of more secure protocols.
+  External XDMCP queries may indicate legitimate access attempts, reconnaissance activity targeting exposed
+  display managers, or vulnerability scanning. Investigation should determine if the source is authorized and
+  if XDMCP exposure is intentional.
+type: detection
+detection_id: '2101867'
+detection_category: ''
+detection_type: nids
+contributors:
+- SecurityOnionSolutions
+created: 2025-10-01
+questions:
+- question: What external host sent the XDMCP information query?
+  context: Identifies the source of the XDMCP query and establishes if it is a known or unknown external system.
+  range: +/-5m
+  query: |
+    aggregation: false
+    logsource:
+      category: network
+      service: connection
+    detection:
+      selection:
+        src_ip: '{source.ip}'
+        dst_ip: '{destination.ip}'
+        dst_port: 177
+      condition: selection
+    fields:
+      - src_ip
+      - dst_ip
+      - src_port
+      - dst_port
+      - network.transport
+- question: What is the baseline frequency of XDMCP queries to this server?
+  context: Establishes whether XDMCP access to this system is routine or unusual.
+  range: -7d
+  query: |
+    aggregation: true
+    logsource:
+      category: network
+      service: connection
+    detection:
+      selection:
+        dst_ip: '{destination.ip}'
+        dst_port: 177
+      condition: selection
+    fields:
+      - src_ip
+      - dst_ip
+- question: Has this external source accessed other X11 or remote display services on this host?
+  context: Reveals if the source is making broader queries to X Window or remote display infrastructure.
+  range: -1h
+  query: |
+    aggregation: false
+    logsource:
+      category: network
+      service: connection
+    detection:
+      selection:
+        src_ip: '{source.ip}'
+        dst_ip: '{destination.ip}'
+        dst_port:
+          - 177
+          - 6000
+          - 6001
+          - 6002
+          - 6003
+      condition: selection
+    fields:
+      - src_ip
+      - dst_ip
+      - dst_port
+      - connection.state
+- question: What other services are exposed on this XDMCP server?
+  context: Identifies other services that may be vulnerable or indicate server purpose.
+  range: -24h
+  query: |
+    aggregation: false
+    logsource:
+      category: network
+      service: connection
+    detection:
+      selection:
+        src_ip: '{destination.ip}'
+      filter:
+        src_port: 177
+      condition: selection and not filter
+    fields:
+      - src_ip
+      - src_port
+      - dst_ip
+      - dst_port
+      - network.transport
+- question: Are there other XDMCP or X11-related alerts for this server?
+  context: Reveals additional detections that may indicate scanning or exploitation attempts.
+  range: -24h
+  query: |
+    aggregation: false
+    logsource:
+      category: alert
+    detection:
+      selection:
+        dst_ip: '{destination.ip}'
+        rule.category|contains:
+          - 'rpc'
+          - 'x11'
+      filter:
+        document_id: '{soc_id}'
+      condition: selection and not filter
+    fields:
+      - src_ip
+      - dst_ip
+      - rule.name
+      - alert.severity_label
+- question: Has this external source targeted other internal hosts with XDMCP queries?
+  context: Determines if this is targeted activity or part of broader network scanning.
+  range: -1h
+  query: |
+    aggregation: false
+    logsource:
+      category: network
+      service: connection
+    detection:
+      selection:
+        src_ip: '{source.ip}'
+        dst_port: 177
+      filter:
+        dst_ip: '{destination.ip}'
+      condition: selection and not filter
+    fields:
+      - src_ip
+      - dst_ip
+      - dst_port
+      - connection.state
+- question: What other external connections has this XDMCP server accepted?
+  context: Reveals broader access patterns and potential exposure of the server.
+  range: -24h
+  query: |
+    aggregation: false
+    logsource:
+      category: network
+      service: connection
+    detection:
+      selection:
+        dst_ip: '{destination.ip}'
+      private_filter:
+        src_ip|cidr:
+          - "10.0.0.0/8"
+          - "172.16.0.0/12"
+          - "192.168.0.0/16"
+      condition: selection and not private_filter
+    fields:
+      - src_ip
+      - dst_ip
+      - dst_port
+      - connection.state
+- question: Are there reconnaissance or scanning alerts associated with this external source?
+  context: Identifies if the source is conducting broader reconnaissance beyond XDMCP services.
+  range: -24h
+  query: |
+    aggregation: false
+    logsource:
+      category: alert
+    detection:
+      selection:
+        src_ip: '{source.ip}'
+        rule.category|contains:
+          - 'scan'
+          - 'recon'
+      condition: selection
+    fields:
+      - src_ip
+      - dst_ip
+      - rule.name
+      - alert.severity_label
+- question: Has this XDMCP server made any outbound connections that could indicate compromise?
+  context: Detects unusual outbound activity that could suggest the server was exploited.
+  range: -24h
+  query: |
+    aggregation: false
+    logsource:
+      category: network
+      service: connection
+    detection:
+      selection:
+        src_ip: '{destination.ip}'
+      private_filter:
+        dst_ip|cidr:
+          - "10.0.0.0/8"
+          - "172.16.0.0/12"
+          - "192.168.0.0/16"
+      condition: selection and not private_filter
+    fields:
+      - src_ip
+      - dst_ip
+      - dst_port
+      - connection.state

@@ -1,0 +1,259 @@
+name: ET SHELLCODE Lichtenfels Shellcode (UDP)
+id: 22009277
+description: |
+  Detects byte patterns consistent with Lichtenfels shellcode transmitted over UDP connections. This shellcode encoder uses XOR operations to obfuscate malicious payloads during exploitation attempts. The pattern may indicate active exploitation delivering encoded payloads, but could also trigger on legitimate binary data transfers, compressed files, or encrypted UDP communications containing similar byte sequences.
+type: detection
+detection_id: "2009277"
+detection_category: ""
+detection_type: nids
+contributors: [SecurityOnionSolutions]
+created: 2025-01-02
+questions:
+  - question: What were the complete UDP connection details containing the shellcode pattern?
+    context: Shows the exact UDP traffic including source/destination ports, byte volumes, and connection metadata.
+    range: +/-15m
+    query: |
+      aggregation: false
+      logsource:
+        category: network
+        service: connection
+      detection:
+        selection:
+          community_id: '{network.community_id}'
+          network.transport: udp
+        condition: selection
+      fields:
+        - src_ip
+        - dst_ip
+        - src_port
+        - dst_port
+        - network.bytes_sent
+        - network.bytes_received
+
+  - question: Does this external source normally communicate with this internal host via UDP?
+    context: Determines if UDP connections from this source represent expected network activity.
+    range: -7d
+    query: |
+      aggregation: false
+      logsource:
+        category: network
+        service: connection
+      detection:
+        selection:
+          src_ip: '{source.ip}'
+          dst_ip: '{destination.ip}'
+          network.transport: udp
+        condition: selection
+      fields:
+        - src_port
+        - dst_port
+        - network.bytes_sent
+
+  - question: What process or service on the target host received this UDP shellcode pattern?
+    context: Identifies the application that processed the data and may be vulnerable to exploitation.
+    range: +/-15m
+    query: |
+      aggregation: false
+      logsource:
+        category: process_creation
+      detection:
+        selection:
+          host.ip: '{destination.ip}'
+        condition: selection
+      fields:
+        - Image
+        - CommandLine
+        - ParentImage
+        - User
+
+  - question: What other UDP traffic occurred between these hosts around the same time?
+    context: Reveals the sequence of network activity that may indicate exploitation staging or post-exploitation activity.
+    range: +/-30m
+    query: |
+      aggregation: false
+      logsource:
+        category: network
+        service: connection
+      detection:
+        selection:
+          src_ip: '{source.ip}'
+          dst_ip: '{destination.ip}'
+          network.transport: udp
+        filter:
+          community_id: '{network.community_id}'
+        condition: selection and not filter
+      fields:
+        - src_port
+        - dst_port
+        - network.bytes_sent
+        - network.bytes_received
+
+  - question: Did the target host establish new external connections after receiving the shellcode pattern?
+    context: Identifies potential reverse shells, command and control callbacks, or data exfiltration following exploitation.
+    range: +30m
+    query: |
+      aggregation: false
+      logsource:
+        category: network
+        service: connection
+      detection:
+        selection:
+          src_ip: '{destination.ip}'
+        filter:
+          dst_ip: '{network.public_ip}'
+        condition: selection and not filter
+      fields:
+        - dst_ip
+        - dst_port
+        - network.transport
+        - network.bytes_sent
+
+  - question: Are other internal hosts receiving similar shellcode patterns from the same source?
+    context: Determines if this is a targeted attack or a broader campaign attempting exploitation across the network.
+    range: +/-1h
+    query: |
+      aggregation: false
+      logsource:
+        category: network
+        service: connection
+      detection:
+        selection:
+          src_ip: '{source.ip}'
+        filter:
+          dst_ip: '{destination.ip}'
+        condition: selection and not filter
+      fields:
+        - dst_ip
+        - dst_port
+        - network.bytes_sent
+
+  - question: What files were created or modified on the target host after the shellcode pattern was detected?
+    context: Identifies payloads, backdoors, or other artifacts deployed through successful exploitation.
+    range: +1h
+    query: |
+      aggregation: false
+      logsource:
+        category: file_event
+      detection:
+        selection:
+          host.ip: '{destination.ip}'
+          file.path|endswith:
+            - .exe
+            - .dll
+            - .ps1
+            - .bat
+            - .cmd
+            - .vbs
+            - .js
+            - .jar
+        condition: selection
+      fields:
+        - file.path
+        - file.name
+        - Image
+        - User
+
+  - question: Were any new processes spawned on the target host after receiving the shellcode?
+    context: Detects process execution that may indicate successful exploitation and payload execution.
+    range: +30m
+    query: |
+      aggregation: false
+      logsource:
+        category: process_creation
+      detection:
+        selection:
+          host.ip: '{destination.ip}'
+        condition: selection
+      fields:
+        - Image
+        - CommandLine
+        - ParentImage
+        - ParentCommandLine
+        - User
+
+  - question: Did any lateral movement occur from the target host after the shellcode detection?
+    context: Identifies whether the host was used as a pivot point for further network compromise.
+    range: +2h
+    query: |
+      aggregation: false
+      logsource:
+        category: network
+        service: connection
+      detection:
+        selection:
+          src_ip: '{destination.ip}'
+          dst_port:
+            - 445
+            - 3389
+            - 22
+            - 5985
+            - 5986
+        filter:
+          dst_ip|cidr:
+            - "10.0.0.0/8"
+            - "172.16.0.0/12"
+            - "192.168.0.0/16"
+        condition: selection and filter
+      fields:
+        - dst_ip
+        - dst_port
+        - network.transport
+
+  - question: Are there related alerts involving shellcode, exploitation, or the same IP addresses?
+    context: Identifies coordinated attack patterns or multiple exploitation attempts from the same infrastructure.
+    range: +/-24h
+    query: |
+      aggregation: false
+      logsource:
+        category: alert
+      detection:
+        selection:
+          related_ip: '{related.ip}'
+        filter:
+          document_id: '{soc_id}'
+        condition: selection and not filter
+      fields:
+        - rule.name
+        - alert.severity_label
+        - src_ip
+        - dst_ip
+
+  - question: What is the communication pattern between the source and target around the shellcode detection?
+    context: Analyzes traffic timing and volume to distinguish between exploitation attempts and false positives.
+    range: +/-30m
+    query: |
+      aggregation: false
+      logsource:
+        category: network
+        service: connection
+      detection:
+        selection:
+          src_ip: '{source.ip}'
+          dst_ip: '{destination.ip}'
+        condition: selection
+      fields:
+        - src_port
+        - dst_port
+        - network.bytes_sent
+        - network.bytes_received
+        - connection.state
+
+  - question: Were any persistence mechanisms established on the target host after the shellcode was detected?
+    context: Identifies registry modifications, scheduled tasks, or services created to maintain access.
+    range: +1h
+    query: |
+      aggregation: false
+      logsource:
+        category: registry_event
+      detection:
+        selection:
+          TargetObject|contains:
+            - \Microsoft\Windows\CurrentVersion\Run
+            - \Microsoft\Windows\CurrentVersion\RunOnce
+            - \Software\Microsoft\Windows NT\CurrentVersion\Winlogon
+        condition: selection
+      fields:
+        - TargetObject
+        - Details
+        - Image
+        - User

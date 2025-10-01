@@ -1,0 +1,200 @@
+name: ET SCAN Potential SSH Scan
+id: 22001219
+description: |
+  This alert detects multiple inbound SSH connection attempts from an external host to internal systems
+  within a short time window (5 connections in 120 seconds). This pattern may indicate automated SSH scanning,
+  brute force attempts, or reconnaissance activity. Organizations may also see this from legitimate sources
+  such as monitoring systems, vulnerability scanners, or automated backup tools. Investigation should determine
+  if the source is authorized and if the connection attempts represent normal operational activity or
+  unauthorized scanning.
+type: detection
+detection_id: '2001219'
+detection_category: ''
+detection_type: nids
+contributors:
+- SecurityOnionSolutions
+created: 2025-10-01
+questions:
+- question: What specific SSH connection attempts triggered this scanning alert?
+  context: Identifies the exact sequence of inbound SSH connections that matched the threshold.
+  range: +/-5m
+  query: |
+    aggregation: false
+    logsource:
+      category: network
+      service: connection
+    detection:
+      selection:
+        src_ip: '{source.ip}'
+        dst_port: 22
+      condition: selection
+    fields:
+      - src_ip
+      - dst_ip
+      - dst_port
+      - connection.state
+      - connection.state_description
+- question: What is the baseline frequency of SSH connections from this external source?
+  context: Establishes whether this volume of SSH connections is normal for this source over the past week.
+  range: -7d
+  query: |
+    aggregation: true
+    logsource:
+      category: network
+      service: connection
+    detection:
+      selection:
+        src_ip: '{source.ip}'
+        dst_port: 22
+      condition: selection
+    fields:
+      - src_ip
+      - dst_ip
+- question: What internal hosts were targeted by this SSH scanning activity?
+  context: Identifies the scope of internal systems that received connection attempts.
+  range: +/-15m
+  query: |
+    aggregation: false
+    logsource:
+      category: network
+      service: connection
+    detection:
+      selection:
+        src_ip: '{source.ip}'
+        dst_port: 22
+      condition: selection
+    fields:
+      - src_ip
+      - dst_ip
+      - dst_port
+      - connection.state
+- question: Were any of the SSH connection attempts successful?
+  context: Determines if connections were established, indicating potential access or continued reconnaissance.
+  range: +/-15m
+  query: |
+    aggregation: false
+    logsource:
+      category: network
+      service: connection
+    detection:
+      selection:
+        src_ip: '{source.ip}'
+        dst_port: 22
+      condition: selection
+    fields:
+      - src_ip
+      - dst_ip
+      - connection.state
+      - connection.state_description
+      - connection.history
+- question: What other services or ports has this external source attempted to connect to?
+  context: Reveals broader scanning activity that may indicate network reconnaissance.
+  range: -1h
+  query: |
+    aggregation: false
+    logsource:
+      category: network
+      service: connection
+    detection:
+      selection:
+        src_ip: '{source.ip}'
+      ssh_filter:
+        dst_port: 22
+      condition: selection and not ssh_filter
+    fields:
+      - src_ip
+      - dst_ip
+      - dst_port
+      - connection.state
+- question: Are there reconnaissance or scanning alerts associated with this external source?
+  context: Identifies other detections that may indicate coordinated scanning or reconnaissance activity.
+  range: -24h
+  query: |
+    aggregation: false
+    logsource:
+      category: alert
+    detection:
+      selection:
+        src_ip: '{source.ip}'
+        rule.category|contains:
+          - 'scan'
+          - 'recon'
+      filter:
+        document_id: '{soc_id}'
+      condition: selection and not filter
+    fields:
+      - src_ip
+      - dst_ip
+      - rule.name
+      - alert.severity_label
+- question: Are other external sources exhibiting similar SSH scanning patterns?
+  context: Determines if this is isolated activity or part of a coordinated scanning campaign.
+  range: -1h
+  query: |
+    aggregation: false
+    logsource:
+      category: alert
+    detection:
+      selection:
+        rule.uuid: "ET SCAN Potential SSH Scan"
+      filter:
+        src_ip: '{source.ip}'
+      condition: selection and not filter
+    fields:
+      - src_ip
+      - dst_ip
+      - rule.name
+- question: What is the geographic or organizational origin of this external source?
+  context: Helps determine if the source is from an expected region or organization.
+  range: +/-5m
+  query: |
+    aggregation: false
+    logsource:
+      category: network
+      service: connection
+    detection:
+      selection:
+        src_ip: '{source.ip}'
+      condition: selection
+    fields:
+      - src_ip
+      - dst_ip
+- question: Have any of the targeted internal hosts generated authentication failure alerts?
+  context: Identifies if the scanning resulted in failed login attempts or brute force activity.
+  range: +/-1h
+  query: |
+    aggregation: false
+    logsource:
+      category: alert
+    detection:
+      selection:
+        src_ip: '{source.ip}'
+        rule.category|contains:
+          - 'brute'
+          - 'auth'
+          - 'ssh'
+      condition: selection
+    fields:
+      - src_ip
+      - dst_ip
+      - rule.name
+      - alert.severity_label
+- question: Are there related alerts involving the same external source and internal targets?
+  context: Reveals other suspicious activity patterns associated with this infrastructure.
+  range: -24h
+  query: |
+    aggregation: false
+    logsource:
+      category: alert
+    detection:
+      selection:
+        src_ip: '{source.ip}'
+      filter:
+        document_id: '{soc_id}'
+      condition: selection and not filter
+    fields:
+      - src_ip
+      - dst_ip
+      - rule.name
+      - alert.severity_label
+      - alert.category

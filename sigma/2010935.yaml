@@ -1,0 +1,236 @@
+name: ET SCAN Suspicious inbound to MSSQL port 1433
+id: 22010935
+description: |
+  This alert detects multiple inbound connection attempts from an external host to Microsoft SQL Server port
+  1433 within a short time window (5 connections in 60 seconds). This pattern may indicate automated scanning,
+  reconnaissance targeting database servers, or brute force attempts. Organizations may also see this from
+  legitimate sources such as authorized database clients, monitoring systems, or backup tools. However, external
+  connections to SQL Server are often unintentional exposure requiring investigation. Investigation should
+  determine if the source is authorized, if the database exposure is intended, and if connection attempts
+  represent normal operational activity or unauthorized access attempts.
+type: detection
+detection_id: '2010935'
+detection_category: ''
+detection_type: nids
+contributors:
+- SecurityOnionSolutions
+created: 2025-10-01
+questions:
+- question: What specific connection attempts to MSSQL port 1433 triggered this alert?
+  context: Identifies the exact sequence of inbound database connection attempts that matched the threshold.
+  range: +/-5m
+  query: |
+    aggregation: false
+    logsource:
+      category: network
+      service: connection
+    detection:
+      selection:
+        src_ip: '{source.ip}'
+        dst_ip: '{destination.ip}'
+        dst_port: 1433
+      condition: selection
+    fields:
+      - src_ip
+      - dst_ip
+      - dst_port
+      - connection.state
+      - connection.state_description
+- question: What is the baseline frequency of MSSQL connections from this external source?
+  context: Establishes whether this volume of database connections is normal for this source over the past week.
+  range: -7d
+  query: |
+    aggregation: true
+    logsource:
+      category: network
+      service: connection
+    detection:
+      selection:
+        src_ip: '{source.ip}'
+        dst_port: 1433
+      condition: selection
+    fields:
+      - src_ip
+      - dst_ip
+- question: Were any of the MSSQL connection attempts successful?
+  context: Determines if connections were established, indicating potential access or continued reconnaissance.
+  range: +/-15m
+  query: |
+    aggregation: false
+    logsource:
+      category: network
+      service: connection
+    detection:
+      selection:
+        src_ip: '{source.ip}'
+        dst_ip: '{destination.ip}'
+        dst_port: 1433
+      condition: selection
+    fields:
+      - src_ip
+      - dst_ip
+      - connection.state
+      - connection.state_description
+      - connection.history
+- question: What other database or SQL-related services has this external source attempted to connect to?
+  context: Reveals broader database scanning activity that may indicate systematic reconnaissance.
+  range: -1h
+  query: |
+    aggregation: false
+    logsource:
+      category: network
+      service: connection
+    detection:
+      selection:
+        src_ip: '{source.ip}'
+        dst_port:
+          - 1433
+          - 3306
+          - 5432
+          - 1521
+          - 27017
+      condition: selection
+    fields:
+      - src_ip
+      - dst_ip
+      - dst_port
+      - connection.state
+- question: What other internal hosts has this external source targeted with MSSQL connections?
+  context: Identifies the scope of database servers that received connection attempts.
+  range: -1h
+  query: |
+    aggregation: false
+    logsource:
+      category: network
+      service: connection
+    detection:
+      selection:
+        src_ip: '{source.ip}'
+        dst_port: 1433
+      filter:
+        dst_ip: '{destination.ip}'
+      condition: selection and not filter
+    fields:
+      - src_ip
+      - dst_ip
+      - dst_port
+      - connection.state
+- question: Are there reconnaissance or scanning alerts associated with this external source?
+  context: Identifies other detections that may indicate coordinated scanning or reconnaissance activity.
+  range: -24h
+  query: |
+    aggregation: false
+    logsource:
+      category: alert
+    detection:
+      selection:
+        src_ip: '{source.ip}'
+        rule.category|contains:
+          - 'scan'
+          - 'recon'
+      filter:
+        document_id: '{soc_id}'
+      condition: selection and not filter
+    fields:
+      - src_ip
+      - dst_ip
+      - rule.name
+      - alert.severity_label
+- question: Are other external sources exhibiting similar MSSQL scanning patterns?
+  context: Determines if this is isolated activity or part of a coordinated database scanning campaign.
+  range: -1h
+  query: |
+    aggregation: false
+    logsource:
+      category: alert
+    detection:
+      selection:
+        rule.uuid: "ET SCAN Suspicious inbound to MSSQL port 1433"
+      filter:
+        src_ip: '{source.ip}'
+      condition: selection and not filter
+    fields:
+      - src_ip
+      - dst_ip
+      - rule.name
+- question: What services are exposed on the targeted MSSQL server?
+  context: Reveals other services that may be vulnerable or indicate server purpose.
+  range: -24h
+  query: |
+    aggregation: false
+    logsource:
+      category: network
+      service: connection
+    detection:
+      selection:
+        src_ip: '{destination.ip}'
+      filter:
+        src_port: 1433
+      condition: selection and not filter
+    fields:
+      - src_ip
+      - src_port
+      - dst_ip
+      - dst_port
+      - network.transport
+- question: Has this MSSQL server generated any authentication or brute force alerts?
+  context: Identifies if the scanning resulted in failed login attempts or credential attacks.
+  range: +/-1h
+  query: |
+    aggregation: false
+    logsource:
+      category: alert
+    detection:
+      selection:
+        dst_ip: '{destination.ip}'
+        rule.category|contains:
+          - 'brute'
+          - 'auth'
+          - 'sql'
+      condition: selection
+    fields:
+      - src_ip
+      - dst_ip
+      - rule.name
+      - alert.severity_label
+- question: Has this MSSQL server made any outbound connections that could indicate compromise?
+  context: Detects unusual outbound activity that could suggest the database server was exploited.
+  range: -24h
+  query: |
+    aggregation: false
+    logsource:
+      category: network
+      service: connection
+    detection:
+      selection:
+        src_ip: '{destination.ip}'
+      private_filter:
+        dst_ip|cidr:
+          - "10.0.0.0/8"
+          - "172.16.0.0/12"
+          - "192.168.0.0/16"
+      condition: selection and not private_filter
+    fields:
+      - src_ip
+      - dst_ip
+      - dst_port
+      - connection.state
+- question: Are there related alerts involving the same external source and database targets?
+  context: Reveals other suspicious activity patterns associated with this infrastructure.
+  range: -24h
+  query: |
+    aggregation: false
+    logsource:
+      category: alert
+    detection:
+      selection:
+        src_ip: '{source.ip}'
+      filter:
+        document_id: '{soc_id}'
+      condition: selection and not filter
+    fields:
+      - src_ip
+      - dst_ip
+      - rule.name
+      - alert.severity_label
+      - alert.category

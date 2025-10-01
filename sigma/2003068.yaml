@@ -1,0 +1,103 @@
+name: ET SCAN Potential SSH Scan OUTBOUND
+id: 22003068
+description: 'This alert detects multiple outbound SSH connection attempts from an
+  internal host to external systems
+
+  within a short time window (5 connections in 120 seconds). This pattern may indicate
+  automated SSH scanning
+
+  or connection attempts to multiple SSH servers. Organizations commonly use SSH for
+  legitimate remote
+
+  administration, automated backups, or DevOps workflows. Investigation should determine
+  if this activity
+
+  is authorized system administration, legitimate automation, or unauthorized scanning
+  activity.
+
+  '
+type: detection
+detection_id: '2003068'
+detection_category: ''
+detection_type: nids
+contributors:
+- SecurityOnionSolutions
+created: 2025-10-01
+questions:
+- question: What specific SSH connection attempts triggered this scanning alert?
+  context: Identifies the exact sequence of outbound SSH connections that matched
+    the threshold.
+  range: +/-5m
+  query: "aggregation: false\nlogsource:\n  category: network\n  service: connection\n\
+    detection:\n  selection:\n    src_ip: '{source.ip}'\n    dst_port: 22\n  condition:\
+    \ selection\nfields:\n  - src_ip\n  - dst_ip\n  - dst_port\n  - connection.state\n\
+    \  - connection.state_description\n"
+- question: What is the baseline pattern of outbound SSH connections from this host?
+  context: Establishes whether this volume of SSH connections is normal for this system
+    over the past week.
+  range: -7d
+  query: "aggregation: true\nlogsource:\n  category: network\n  service: connection\n\
+    detection:\n  selection:\n    src_ip: '{source.ip}'\n    dst_port: 22\n  condition:\
+    \ selection\nfields:\n  - src_ip\n  - dst_ip\n"
+- question: What process on this host initiated the SSH connections?
+  context: Identifies the specific application or service making these connections.
+  range: +/-15m
+  query: "aggregation: false\nlogsource:\n  category: process_creation\ndetection:\n\
+    \  selection:\n    host.ip: '{source.ip}'\n    Image|contains: 'ssh'\n  condition:\
+    \ selection\nfields:\n  - Image\n  - CommandLine\n  - User\n  - ProcessGuid\n\
+    \  - ParentImage\n"
+- question: Were the SSH connection attempts successful or failed?
+  context: Determines if connections were established or rejected, indicating access
+    or reconnaissance.
+  range: +/-15m
+  query: "aggregation: false\nlogsource:\n  category: network\n  service: connection\n\
+    detection:\n  selection:\n    src_ip: '{source.ip}'\n    dst_port: 22\n  condition:\
+    \ selection\nfields:\n  - src_ip\n  - dst_ip\n  - connection.state\n  - connection.state_description\n\
+    \  - connection.history\n"
+- question: What other external connections occurred from this host around the same
+    time?
+  context: Reveals broader network activity patterns that may indicate legitimate
+    automation or scanning.
+  range: +/-30m
+  query: "aggregation: false\nlogsource:\n  category: network\n  service: connection\n\
+    detection:\n  selection:\n    src_ip: '{source.ip}'\n  private_filter:\n    dst_ip|cidr:\n\
+    \      - \"10.0.0.0/8\"\n      - \"172.16.0.0/12\"\n      - \"192.168.0.0/16\"\
+    \n  ssh_filter:\n    dst_port: 22\n  condition: selection and not private_filter\
+    \ and not ssh_filter\nfields:\n  - src_ip\n  - dst_ip\n  - dst_port\n  - connection.state\n"
+- question: Are the target SSH servers related or on the same network ranges?
+  context: Identifies if the scan targeted sequential IPs or specific infrastructure
+    patterns.
+  range: +/-15m
+  query: "aggregation: false\nlogsource:\n  category: network\n  service: connection\n\
+    detection:\n  selection:\n    src_ip: '{source.ip}'\n    dst_port: 22\n  condition:\
+    \ selection\nfields:\n  - src_ip\n  - dst_ip\n  - dst_port\n"
+- question: Has this host generated other scanning or reconnaissance alerts?
+  context: Reveals if this is part of broader scanning activity across multiple protocols
+    or services.
+  range: -24h
+  query: "aggregation: false\nlogsource:\n  category: alert\ndetection:\n  selection:\n\
+    \    src_ip: '{source.ip}'\n    rule.category|contains:\n      - 'scan'\n    \
+    \  - 'recon'\n  filter:\n    document_id: '{soc_id}'\n  condition: selection and\
+    \ not filter\nfields:\n  - src_ip\n  - dst_ip\n  - rule.name\n  - alert.severity_label\n"
+- question: Are other internal hosts exhibiting similar SSH scanning patterns?
+  context: Determines if this is isolated activity or part of a coordinated scanning
+    campaign.
+  range: -1h
+  query: "aggregation: false\nlogsource:\n  category: alert\ndetection:\n  selection:\n\
+    \    rule.uuid: \"ET SCAN Potential SSH Scan OUTBOUND\"\n  filter:\n    src_ip:\
+    \ '{source.ip}'\n  condition: selection and not filter\nfields:\n  - src_ip\n\
+    \  - dst_ip\n  - rule.name\n"
+- question: What user account is associated with this host during the scanning activity?
+  context: Links the activity to a specific user for accountability and investigation.
+  range: +/-30m
+  query: "aggregation: false\nlogsource:\n  category: process_creation\ndetection:\n\
+    \  selection:\n    host.ip: '{source.ip}'\n  condition: selection\nfields:\n \
+    \ - User\n  - Image\n  - CommandLine\n  - ProcessGuid\n"
+- question: Were any files accessed or created on this host before the SSH scanning
+    began?
+  context: Identifies potential malware, scripts, or tools that may have initiated
+    the scanning.
+  range: -30m
+  query: "aggregation: false\nlogsource:\n  category: file_event\ndetection:\n  selection:\n\
+    \    host.ip: '{source.ip}'\n  condition: selection\nfields:\n  - file.path\n\
+    \  - file.name\n  - Image\n  - User\n  - ProcessGuid\n"

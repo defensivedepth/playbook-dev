@@ -1,0 +1,202 @@
+name: ET INFO OpenAI API Domain in DNS Lookup (api .openai .com)
+id: 22044998
+description: |
+  This alert detects DNS queries for api.openai.com, indicating that an internal host is accessing OpenAI's
+  API services. Organizations may use OpenAI's API for legitimate business purposes such as integrating
+  ChatGPT, DALL-E, or other AI services into applications and workflows. However, this activity may also
+  indicate unauthorized use of AI services, data exfiltration risks through AI prompts, or shadow IT.
+  Investigation should determine if the access is authorized, identify what user or application is making
+  the requests, and assess whether sensitive data is being transmitted.
+type: detection
+detection_id: '2044998'
+detection_category: ''
+detection_type: nids
+contributors:
+- SecurityOnionSolutions
+created: 2025-10-01
+questions:
+- question: What internal host queried the OpenAI API domain?
+  context: Identifies the specific system accessing OpenAI services.
+  range: +/-5m
+  query: |
+    aggregation: false
+    logsource:
+      category: network
+      service: dns
+    detection:
+      selection:
+        src_ip: '{source.ip}'
+        dns.query.name: '{dns.query_name}'
+      condition: selection
+    fields:
+      - src_ip
+      - dst_ip
+      - dns.query.name
+      - dns.resolved_ip
+      - dns.query.type_name
+- question: What is the baseline frequency of OpenAI API queries from this host?
+  context: Establishes whether this API usage is a new pattern or ongoing activity for this system.
+  range: -7d
+  query: |
+    aggregation: true
+    logsource:
+      category: network
+      service: dns
+    detection:
+      selection:
+        src_ip: '{source.ip}'
+        dns.query.name|contains: 'openai.com'
+      condition: selection
+    fields:
+      - src_ip
+      - dns.query.name
+- question: What process or application on the host initiated the OpenAI API query?
+  context: Identifies whether the access is from a browser, custom application, or potentially unauthorized tool.
+  range: +/-15m
+  query: |
+    aggregation: false
+    logsource:
+      category: process_creation
+    detection:
+      selection:
+        host.ip: '{source.ip}'
+      condition: selection
+    fields:
+      - Image
+      - CommandLine
+      - User
+      - ProcessGuid
+      - ParentImage
+- question: What HTTPS connections were established to OpenAI infrastructure after the DNS query?
+  context: Reveals actual API communication patterns and connection details.
+  range: +15m
+  query: |
+    aggregation: false
+    logsource:
+      category: network
+      service: ssl
+    detection:
+      selection:
+        src_ip: '{source.ip}'
+        ssl.server_name|contains: 'openai.com'
+      condition: selection
+    fields:
+      - src_ip
+      - dst_ip
+      - ssl.server_name
+      - ssl.version
+      - hash.ja3
+- question: What user account was logged into this host during the OpenAI API access?
+  context: Links the API usage to a specific user for accountability and policy enforcement.
+  range: +/-30m
+  query: |
+    aggregation: false
+    logsource:
+      category: process_creation
+    detection:
+      selection:
+        host.ip: '{source.ip}'
+      condition: selection
+    fields:
+      - User
+      - Image
+      - CommandLine
+- question: Are other internal hosts also accessing OpenAI API services?
+  context: Determines the scope of OpenAI usage across the organization.
+  range: -24h
+  query: |
+    aggregation: false
+    logsource:
+      category: network
+      service: dns
+    detection:
+      selection:
+        dns.query.name|contains: 'openai.com'
+      filter:
+        src_ip: '{source.ip}'
+      condition: selection and not filter
+    fields:
+      - src_ip
+      - dns.query.name
+      - dns.resolved_ip
+- question: What other AI or cloud-based API services has this host accessed?
+  context: Reveals broader pattern of cloud AI service usage that may indicate shadow IT or data exfiltration risks.
+  range: -24h
+  query: |
+    aggregation: false
+    logsource:
+      category: network
+      service: dns
+    detection:
+      selection:
+        src_ip: '{source.ip}'
+        dns.query.name|contains:
+          - 'anthropic.com'
+          - 'claude.ai'
+          - 'cohere.com'
+          - 'ai.google'
+          - 'bard.google'
+          - 'huggingface.co'
+      condition: selection
+    fields:
+      - dns.query.name
+      - dns.resolved_ip
+- question: What files were accessed on this host before and after the OpenAI API query?
+  context: Identifies potential data sources that may have been shared with AI services.
+  range: +/-30m
+  query: |
+    aggregation: false
+    logsource:
+      category: file_event
+    detection:
+      selection:
+        host.ip: '{source.ip}'
+      condition: selection
+    fields:
+      - file.path
+      - file.name
+      - Image
+      - User
+      - ProcessGuid
+- question: Has this host generated any data loss prevention or exfiltration alerts?
+  context: Identifies if data protection controls have detected potential data sharing risks.
+  range: -24h
+  query: |
+    aggregation: false
+    logsource:
+      category: alert
+    detection:
+      selection:
+        src_ip: '{source.ip}'
+        rule.category|contains:
+          - 'data'
+          - 'exfil'
+          - 'policy'
+      condition: selection
+    fields:
+      - src_ip
+      - dst_ip
+      - rule.name
+      - alert.severity_label
+- question: What other external services has this host connected to recently?
+  context: Reveals broader external communication patterns that may indicate legitimate workflow or risky behavior.
+  range: -1h
+  query: |
+    aggregation: false
+    logsource:
+      category: network
+      service: connection
+    detection:
+      selection:
+        src_ip: '{source.ip}'
+      private_filter:
+        dst_ip|cidr:
+          - "10.0.0.0/8"
+          - "172.16.0.0/12"
+          - "192.168.0.0/16"
+      condition: selection and not private_filter
+    fields:
+      - src_ip
+      - dst_ip
+      - dst_port
+      - connection.state
