@@ -1,0 +1,224 @@
+name: ET INFO PE EXE or DLL Windows file download HTTP
+id: 22018959
+description: |
+  Detects HTTP downloads of Windows Portable Executable (PE) files including executables and DLLs based on PE file header signatures. While PE file downloads are common for legitimate software updates and installations, they can also indicate malware distribution, unauthorized software deployment, or payload delivery following exploitation. This detection helps track executable file transfers that may require additional scrutiny in environments with strict software deployment policies.
+type: detection
+detection_id: "2018959"
+detection_category: ""
+detection_type: nids
+contributors: [SecurityOnionSolutions]
+created: 2025-01-02
+questions:
+  - question: What was the complete HTTP transaction for the PE file download?
+    context: Shows the exact HTTP request and response including URL, headers, and file size for the executable download.
+    range: +/-15m
+    query: |
+      aggregation: false
+      logsource:
+        category: network
+        service: http
+      detection:
+        selection:
+          community_id: '{network.community_id}'
+        condition: selection
+      fields:
+        - http.method
+        - http.uri
+        - http.virtual_host
+        - http.user_agent
+        - http.status_code
+        - http.request.body.length
+        - src_ip
+        - dst_ip
+
+  - question: Does this internal host normally download executable files from this external source?
+    context: Determines if PE file downloads from this domain represent expected software update or installation activity.
+    range: -7d
+    query: |
+      aggregation: false
+      logsource:
+        category: network
+        service: http
+      detection:
+        selection:
+          src_ip: '{destination.ip}'
+          dst_ip: '{source.ip}'
+        condition: selection
+      fields:
+        - http.uri
+        - http.virtual_host
+        - http.status_code
+
+  - question: What process or application on the host initiated the request that downloaded the PE file?
+    context: Identifies whether the download was initiated by a browser, automated update process, or potentially suspicious application.
+    range: +/-15m
+    query: |
+      aggregation: false
+      logsource:
+        category: process_creation
+      detection:
+        selection:
+          host.ip: '{destination.ip}'
+        condition: selection
+      fields:
+        - Image
+        - CommandLine
+        - ParentImage
+        - User
+
+  - question: What other executable files were downloaded by this host during the same timeframe?
+    context: Reveals the scope of executable file transfer activity and identifies patterns of software deployment or malware staging.
+    range: +/-1h
+    query: |
+      aggregation: false
+      logsource:
+        category: network
+        service: http
+      detection:
+        selection:
+          src_ip: '{destination.ip}'
+        filter:
+          dst_ip: '{source.ip}'
+        condition: selection and not filter
+      fields:
+        - dst_ip
+        - http.uri
+        - http.virtual_host
+        - http.status_code
+
+  - question: Are other internal hosts downloading files from the same external source?
+    context: Determines if this is isolated activity or part of an organization-wide software deployment or potential malware campaign.
+    range: +/-1h
+    query: |
+      aggregation: false
+      logsource:
+        category: network
+        service: http
+      detection:
+        selection:
+          dst_ip: '{source.ip}'
+        filter:
+          src_ip: '{destination.ip}'
+        condition: selection and not filter
+      fields:
+        - src_ip
+        - http.uri
+        - http.virtual_host
+
+  - question: What files were created on the host after the PE file download?
+    context: Identifies where the downloaded executable was saved and any additional files created during or after execution.
+    range: +30m
+    query: |
+      aggregation: false
+      logsource:
+        category: file_event
+      detection:
+        selection:
+          host.ip: '{destination.ip}'
+          file.path|endswith:
+            - .exe
+            - .dll
+            - .sys
+            - .scr
+        condition: selection
+      fields:
+        - file.path
+        - file.name
+        - Image
+        - User
+
+  - question: Was the downloaded PE file executed on the host?
+    context: Detects process creation events that may indicate execution of the downloaded file.
+    range: +1h
+    query: |
+      aggregation: false
+      logsource:
+        category: process_creation
+      detection:
+        selection:
+          host.ip: '{destination.ip}'
+        condition: selection
+      fields:
+        - Image
+        - CommandLine
+        - ParentImage
+        - ParentCommandLine
+        - User
+        - CurrentDirectory
+
+  - question: Did the host establish new external connections after downloading the PE file?
+    context: Identifies potential command and control callbacks or additional payload downloads following executable file retrieval.
+    range: +30m
+    query: |
+      aggregation: false
+      logsource:
+        category: network
+        service: connection
+      detection:
+        selection:
+          src_ip: '{destination.ip}'
+        filter:
+          dst_ip: '{network.public_ip}'
+        condition: selection and not filter
+      fields:
+        - dst_ip
+        - dst_port
+        - network.transport
+        - network.bytes_sent
+
+  - question: What DNS queries were made by the host before and after the PE file download?
+    context: Reveals domains resolved that may be associated with software distribution infrastructure or malware delivery networks.
+    range: +/-30m
+    query: |
+      aggregation: false
+      logsource:
+        category: network
+        service: dns
+      detection:
+        selection:
+          src_ip: '{destination.ip}'
+        condition: selection
+      fields:
+        - dns.query.name
+        - dns.resolved_ip
+        - dns.query.type_name
+
+  - question: Are there related alerts involving file downloads, malware, or the same IP addresses?
+    context: Identifies other suspicious download patterns or malware detections associated with this infrastructure.
+    range: +/-24h
+    query: |
+      aggregation: false
+      logsource:
+        category: alert
+      detection:
+        selection:
+          related_ip: '{related.ip}'
+        filter:
+          document_id: '{soc_id}'
+        condition: selection and not filter
+      fields:
+        - rule.name
+        - alert.severity_label
+        - src_ip
+        - dst_ip
+
+  - question: Were any persistence mechanisms established on the host after the PE file download?
+    context: Identifies registry modifications or scheduled tasks that may indicate installation of persistent software or malware.
+    range: +1h
+    query: |
+      aggregation: false
+      logsource:
+        category: registry_event
+      detection:
+        selection:
+          TargetObject|contains:
+            - \Microsoft\Windows\CurrentVersion\Run
+            - \Microsoft\Windows\CurrentVersion\RunOnce
+            - \Software\Microsoft\Windows NT\CurrentVersion\Winlogon
+            - \System\CurrentControlSet\Services
+        condition: selection
+      fields:
+        - TargetObject
+        - Details
+        - Image
+        - User
