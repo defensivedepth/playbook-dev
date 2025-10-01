@@ -1,0 +1,274 @@
+name: ET MALWARE Zbot POST Request to C2
+id: 22019141
+description: |
+  Detects HTTP POST requests with header patterns consistent with Zbot (Zeus) malware communicating with command and control infrastructure. Zbot uses distinctive HTTP headers including a specific User-Agent pattern and header ordering to exfiltrate data and receive commands. This pattern may indicate active Zbot infection performing data theft or receiving instructions, but could also trigger on legitimate applications using similar HTTP client implementations or custom API clients with comparable header structures.
+type: detection
+detection_id: "2019141"
+detection_category: ""
+detection_type: nids
+contributors: [SecurityOnionSolutions]
+created: 2025-01-02
+questions:
+  - question: What was the complete HTTP POST request matching the Zbot C2 pattern?
+    context: Shows the exact HTTP request including URI, headers, and User-Agent that match Zbot command and control communication.
+    range: +/-15m
+    query: |
+      aggregation: false
+      logsource:
+        category: network
+        service: http
+      detection:
+        selection:
+          community_id: '{network.community_id}'
+          http.method: POST
+        condition: selection
+      fields:
+        - http.uri
+        - http.user_agent
+        - http.virtual_host
+        - http.request.body.length
+        - src_ip
+        - dst_ip
+
+  - question: Does this internal host normally access this external PHP endpoint?
+    context: Determines if HTTP POST requests to PHP scripts on this destination represent typical application behavior.
+    range: -7d
+    query: |
+      aggregation: false
+      logsource:
+        category: network
+        service: http
+      detection:
+        selection:
+          src_ip: '{source.ip}'
+          dst_ip: '{destination.ip}'
+        condition: selection
+      fields:
+        - http.uri
+        - http.method
+        - http.virtual_host
+
+  - question: What process on the internal host initiated the HTTP POST request to the suspected C2 server?
+    context: Identifies the application making the request that may be Zbot malware or a related component.
+    range: +/-15m
+    query: |
+      aggregation: false
+      logsource:
+        category: process_creation
+      detection:
+        selection:
+          host.ip: '{source.ip}'
+        condition: selection
+      fields:
+        - Image
+        - CommandLine
+        - ParentImage
+        - ParentCommandLine
+        - User
+
+  - question: What other HTTP POST requests to PHP endpoints occurred from this host?
+    context: Reveals the scope of C2 communication activity and identifies additional infrastructure.
+    range: +/-1h
+    query: |
+      aggregation: false
+      logsource:
+        category: network
+        service: http
+      detection:
+        selection:
+          src_ip: '{source.ip}'
+          http.method: POST
+          http.uri|contains: .php
+        filter:
+          dst_ip: '{destination.ip}'
+        condition: selection and not filter
+      fields:
+        - dst_ip
+        - http.uri
+        - http.virtual_host
+        - http.user_agent
+
+  - question: Are other internal hosts making similar HTTP POST requests to the same C2 infrastructure?
+    context: Determines if this is an isolated infection or a broader Zbot campaign affecting multiple systems.
+    range: +/-1h
+    query: |
+      aggregation: false
+      logsource:
+        category: network
+        service: http
+      detection:
+        selection:
+          dst_ip: '{destination.ip}'
+          http.method: POST
+        filter:
+          src_ip: '{source.ip}'
+        condition: selection and not filter
+      fields:
+        - src_ip
+        - http.uri
+        - http.user_agent
+
+  - question: What is the timing pattern and frequency of HTTP POST requests to this C2 server?
+    context: Analyzes communication intervals to distinguish between Zbot beaconing patterns and legitimate application traffic.
+    range: +/-1h
+    query: |
+      aggregation: false
+      logsource:
+        category: network
+        service: http
+      detection:
+        selection:
+          src_ip: '{source.ip}'
+          dst_ip: '{destination.ip}'
+          http.method: POST
+        condition: selection
+      fields:
+        - http.uri
+        - http.request.body.length
+        - http.status_code
+
+  - question: What files were created or modified on the host after the Zbot C2 communication was detected?
+    context: Identifies payloads, configuration files, or data staged for exfiltration by the malware.
+    range: +1h
+    query: |
+      aggregation: false
+      logsource:
+        category: file_event
+      detection:
+        selection:
+          host.ip: '{source.ip}'
+          file.path|endswith:
+            - .exe
+            - .dll
+            - .dat
+            - .bin
+            - .tmp
+        condition: selection
+      fields:
+        - file.path
+        - file.name
+        - Image
+        - User
+
+  - question: Were any new processes spawned on the host around the time of the C2 communication?
+    context: Detects process execution that may indicate Zbot downloading and executing additional modules.
+    range: +/-30m
+    query: |
+      aggregation: false
+      logsource:
+        category: process_creation
+      detection:
+        selection:
+          host.ip: '{source.ip}'
+        condition: selection
+      fields:
+        - Image
+        - CommandLine
+        - ParentImage
+        - User
+        - CurrentDirectory
+
+  - question: Did the host establish connections to other external servers around the C2 communication?
+    context: Identifies additional C2 channels, data exfiltration destinations, or malware distribution infrastructure.
+    range: +/-30m
+    query: |
+      aggregation: false
+      logsource:
+        category: network
+        service: connection
+      detection:
+        selection:
+          src_ip: '{source.ip}'
+        filter:
+          dst_ip: '{network.public_ip}'
+        condition: selection and not filter
+      fields:
+        - dst_ip
+        - dst_port
+        - network.transport
+        - network.bytes_sent
+
+  - question: Did any lateral movement occur from the infected host after the Zbot C2 detection?
+    context: Identifies whether the host was used as a pivot point for further network compromise.
+    range: +2h
+    query: |
+      aggregation: false
+      logsource:
+        category: network
+        service: connection
+      detection:
+        selection:
+          src_ip: '{source.ip}'
+          dst_port:
+            - 445
+            - 3389
+            - 22
+            - 5985
+            - 5986
+        filter:
+          dst_ip|cidr:
+            - "10.0.0.0/8"
+            - "172.16.0.0/12"
+            - "192.168.0.0/16"
+        condition: selection and filter
+      fields:
+        - dst_ip
+        - dst_port
+        - network.transport
+
+  - question: Are there related alerts involving malware, C2 communication, or the same IP addresses?
+    context: Identifies coordinated attack patterns or multiple malware families operating from the same infrastructure.
+    range: +/-24h
+    query: |
+      aggregation: false
+      logsource:
+        category: alert
+      detection:
+        selection:
+          related_ip: '{related.ip}'
+        filter:
+          document_id: '{soc_id}'
+        condition: selection and not filter
+      fields:
+        - rule.name
+        - alert.severity_label
+        - src_ip
+        - dst_ip
+
+  - question: Were any persistence mechanisms established on the host after the Zbot C2 communication?
+    context: Identifies registry modifications, scheduled tasks, or services created by Zbot to maintain access.
+    range: +1h
+    query: |
+      aggregation: false
+      logsource:
+        category: registry_event
+      detection:
+        selection:
+          TargetObject|contains:
+            - \Microsoft\Windows\CurrentVersion\Run
+            - \Microsoft\Windows\CurrentVersion\RunOnce
+            - \Software\Microsoft\Windows NT\CurrentVersion\Winlogon
+            - \System\CurrentControlSet\Services
+        condition: selection
+      fields:
+        - TargetObject
+        - Details
+        - Image
+        - User
+
+  - question: What DNS queries were made by the host before and after the Zbot C2 communication?
+    context: Reveals domains resolved for C2 infrastructure and potential DGA-generated domains used by Zbot.
+    range: +/-30m
+    query: |
+      aggregation: false
+      logsource:
+        category: network
+        service: dns
+      detection:
+        selection:
+          src_ip: '{source.ip}'
+        condition: selection
+      fields:
+        - dns.query.name
+        - dns.resolved_ip
+        - dns.query.type_name
