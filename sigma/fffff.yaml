@@ -1,0 +1,269 @@
+name: Usage Of Web Request Commands And Cmdlets
+id: 1512006
+description: |
+  Detects the use of various web request commands with commandline tools and Windows PowerShell cmdlets (including aliases) via CommandLine.
+  This activity is commonly associated with file downloads for initial access, payload staging, lateral movement tools, or data exfiltration.
+  While these commands have legitimate administrative uses, they are frequently leveraged in post-exploitation scenarios to download additional malware, tools, or scripts.
+type: detection
+detection_id: 9fc51a3c-81b3-4fa7-b35f-7c02cf10fd2d
+detection_category: ''
+detection_type: sigma
+contributors:
+- SecurityOnionSolutions
+created: 2025-10-12
+questions:
+- question: What was the full command line used for the web request?
+  context: Identifies the exact web request syntax used, including the URL, destination path, and any additional parameters.
+  range: +/-5m
+  query: |
+    aggregation: false
+    logsource:
+      category: process_creation
+      product: windows
+    detection:
+      selection:
+        ProcessGuid: '{event_data.process.entity_id}'
+      condition: selection
+    fields:
+      - User
+      - Image
+      - CommandLine
+      - ParentImage
+      - ParentCommandLine
+- question: What URL was accessed in the web request?
+  context: Reveals the source location being downloaded from, which could be a legitimate site, attacker infrastructure, or compromised server.
+  range: +/-5m
+  query: |
+    aggregation: false
+    logsource:
+      category: process_creation
+      product: windows
+    detection:
+      selection:
+        host.ip: '%host.ip%'
+        CommandLine|contains:
+          - '[System.Net.WebRequest]::create'
+          - 'curl '
+          - 'Invoke-RestMethod'
+          - 'Invoke-WebRequest'
+          - ' irm '
+          - 'iwr '
+          - 'Net.WebClient'
+          - 'Resume-BitsTransfer'
+          - 'Start-BitsTransfer'
+          - 'wget '
+          - 'WinHttp.WinHttpRequest'
+      condition: selection
+    fields:
+      - User
+      - Image
+      - CommandLine
+      - ParentImage
+- question: What process spawned the web request command?
+  context: Reveals the parent process chain that led to the web request, indicating whether it was from a user shell, script, Office macro, or other process.
+  range: -15m
+  query: |
+    aggregation: false
+    logsource:
+      category: process_creation
+      product: windows
+    detection:
+      selection:
+        ProcessGuid: '{event_data.process.parent.entity_id}'
+      condition: selection
+    fields:
+      - User
+      - Image
+      - CommandLine
+      - ParentImage
+      - ParentCommandLine
+- question: What file was downloaded and where was it saved?
+  context: Identifies the local destination path of the downloaded file, revealing staging locations and file names used by the activity.
+  range: +/-5m
+  query: |
+    aggregation: false
+    logsource:
+      category: file_event
+      product: windows
+    detection:
+      selection:
+        host.ip: '%host.ip%'
+      condition: selection
+    fields:
+      - User
+      - Image
+      - TargetFilename
+      - ProcessGuid
+- question: What child processes were executed after the file was downloaded?
+  context: Tracks whether the downloaded file was executed immediately, revealing post-download activity and impact.
+  range: +15m
+  query: |
+    aggregation: false
+    logsource:
+      category: process_creation
+      product: windows
+    detection:
+      selection:
+        ParentProcessGuid: '{event_data.process.entity_id}'
+      condition: selection
+    fields:
+      - User
+      - Image
+      - CommandLine
+      - ParentImage
+- question: Was the downloaded file executed on this host?
+  context: Determines if the downloaded payload was executed, indicating successful delivery and execution of a potential second-stage payload.
+  range: +30m
+  query: |
+    aggregation: false
+    logsource:
+      category: process_creation
+      product: windows
+    detection:
+      selection:
+        host.ip: '%host.ip%'
+      condition: selection
+    fields:
+      - User
+      - Image
+      - CommandLine
+      - ParentImage
+      - ProcessGuid
+- question: Is web request usage typical for this user account?
+  context: Establishes whether this is normal administrative behavior for this user or an anomaly suggesting unauthorized activity.
+  range: -7d
+  query: |
+    aggregation: false
+    logsource:
+      category: process_creation
+      product: windows
+    detection:
+      selection:
+        User: '{event_data.user.name}'
+        CommandLine|contains:
+          - 'Invoke-WebRequest'
+          - 'Invoke-RestMethod'
+          - 'Start-BitsTransfer'
+          - 'Net.WebClient'
+          - 'curl '
+          - 'wget '
+      condition: selection
+    fields:
+      - User
+      - Image
+      - CommandLine
+      - Hostname
+- question: What other hosts have made web requests to the same URL in the past 24 hours?
+  context: Identifies if this is an isolated incident or part of a broader campaign targeting multiple hosts with the same payload source.
+  range: -24h
+  query: |
+    aggregation: false
+    logsource:
+      category: process_creation
+      product: windows
+    detection:
+      selection:
+        CommandLine|contains:
+          - 'Invoke-WebRequest'
+          - 'Invoke-RestMethod'
+          - 'Start-BitsTransfer'
+          - 'Net.WebClient'
+      filter:
+        host.ip: '%host.ip%'
+      condition: selection and not filter
+    fields:
+      - User
+      - Hostname
+      - host.ip
+      - CommandLine
+- question: Was PowerShell used to download the file?
+  context: Identifies PowerShell-based download activity, which is commonly used for fileless malware delivery and post-exploitation tooling.
+  range: +/-15m
+  query: |
+    aggregation: false
+    logsource:
+      category: process_creation
+      product: windows
+    detection:
+      selection:
+        host.ip: '%host.ip%'
+        Image|endswith:
+          - '\powershell.exe'
+          - '\pwsh.exe'
+        CommandLine|contains:
+          - 'Invoke-WebRequest'
+          - 'Invoke-RestMethod'
+          - ' irm '
+          - 'iwr '
+          - 'Net.WebClient'
+          - '[System.Net.WebRequest]'
+      condition: selection
+    fields:
+      - User
+      - Image
+      - CommandLine
+      - ParentImage
+- question: What network connections were initiated during or after the web request?
+  context: Reveals additional network activity following the download, such as command and control beaconing or lateral movement attempts.
+  range: +30m
+  query: |
+    aggregation: false
+    logsource:
+      category: network_connection
+      product: windows
+    detection:
+      selection:
+        host.ip: '%host.ip%'
+      condition: selection
+    fields:
+      - User
+      - Image
+      - DestinationIp
+      - DestinationPort
+      - ProcessGuid
+- question: Were any BITS transfers initiated?
+  context: Identifies Background Intelligent Transfer Service usage, which can be used for stealthy, resumable file downloads that persist across reboots.
+  range: +/-30m
+  query: |
+    aggregation: false
+    logsource:
+      category: process_creation
+      product: windows
+    detection:
+      selection:
+        host.ip: '%host.ip%'
+        CommandLine|contains:
+          - 'Start-BitsTransfer'
+          - 'Resume-BitsTransfer'
+          - 'Add-BitsFile'
+      condition: selection
+    fields:
+      - User
+      - Image
+      - CommandLine
+      - ParentImage
+- question: Did the same user account perform web requests on other hosts?
+  context: Tracks whether this technique was attempted across multiple systems by the same user, indicating targeted activity or campaign scope.
+  range: +/-24h
+  query: |
+    aggregation: false
+    logsource:
+      category: process_creation
+      product: windows
+    detection:
+      selection:
+        User: '{event_data.user.name}'
+        CommandLine|contains:
+          - 'Invoke-WebRequest'
+          - 'Invoke-RestMethod'
+          - 'Start-BitsTransfer'
+          - 'Net.WebClient'
+      filter:
+        host.ip: '%host.ip%'
+      condition: selection and not filter
+    fields:
+      - User
+      - Hostname
+      - host.ip
+      - CommandLine
+
