@@ -1,0 +1,207 @@
+name: Security Privileges Enumeration Via Whoami.EXE
+id: 1510001
+description: |
+  Detects execution of whoami.exe with the /priv flag to enumerate current user privileges. This technique is commonly used after successful privilege escalation to verify elevated permissions, but can also be part of legitimate administrative activities or security testing.
+type: detection
+detection_id: 97a80ec7-0e2f-4d05-9ef4-65760e634f6b
+detection_category: ''
+detection_type: sigma
+contributors:
+- SecurityOnionSolutions
+created: 2025-10-14
+questions:
+- question: What was the full whoami command executed on this host?
+  context: Identifies the exact command syntax and flags used to enumerate privileges.
+  range: +/-1m
+  query: |
+    aggregation: false
+    logsource:
+      category: process_creation
+      product: windows
+    detection:
+      selection:
+        ProcessGuid: '{event_data.process.entity_id}'
+      condition: selection
+    fields:
+      - CommandLine
+      - Image
+      - User
+      - ParentImage
+- question: What process spawned the whoami.exe execution?
+  context: Reveals how whoami was initiated and the parent process chain leading to privilege enumeration.
+  range: -5m
+  query: |
+    aggregation: false
+    logsource:
+      category: process_creation
+      product: windows
+    detection:
+      selection:
+        ProcessGuid: '{event_data.process.parent.entity_id}'
+      condition: selection
+    fields:
+      - Image
+      - CommandLine
+      - User
+      - ParentImage
+- question: What other process activity occurred within 10 minutes around the whoami execution?
+  context: Identifies related activity that may indicate privilege escalation attempts or post-exploitation behavior.
+  range: +/-10m
+  query: |
+    aggregation: false
+    logsource:
+      category: process_creation
+      product: windows
+    detection:
+      selection:
+        host.ip: '%host.ip%'
+        User: '{event_data.user.name}'
+      filter:
+        ProcessGuid: '{event_data.process.entity_id}'
+      condition: selection and not filter
+    fields:
+      - Image
+      - CommandLine
+      - User
+      - ParentImage
+- question: Were there other privilege enumeration commands executed by the same user?
+  context: Discovers additional reconnaissance or discovery commands that may indicate broader enumeration activity.
+  range: +/-15m
+  query: |
+    aggregation: false
+    logsource:
+      category: process_creation
+      product: windows
+    detection:
+      selection:
+        host.ip: '%host.ip%'
+        User: '{event_data.user.name}'
+        Image|endswith:
+          - '\whoami.exe'
+          - '\net.exe'
+          - '\net1.exe'
+          - '\systeminfo.exe'
+          - '\tasklist.exe'
+          - '\qwinsta.exe'
+      filter:
+        ProcessGuid: '{event_data.process.entity_id}'
+      condition: selection and not filter
+    fields:
+      - Image
+      - CommandLine
+      - User
+      - ParentImage
+- question: Is whoami execution typical for this user account?
+  context: Establishes baseline behavior for this user to distinguish between normal administrative activity and anomalous privilege checks.
+  range: -7d
+  query: |
+    aggregation: false
+    logsource:
+      category: process_creation
+      product: windows
+    detection:
+      selection:
+        User: '{event_data.user.name}'
+        Image|endswith: '\whoami.exe'
+      filter:
+        ProcessGuid: '{event_data.process.entity_id}'
+      condition: selection and not filter
+    fields:
+      - Image
+      - CommandLine
+      - Hostname
+      - ParentImage
+- question: With what frequency has this host executed whoami previously?
+  context: Determines if whoami is regularly used on this endpoint for legitimate purposes or if this represents unusual behavior.
+  range: -30d
+  query: |
+    aggregation: false
+    logsource:
+      category: process_creation
+      product: windows
+    detection:
+      selection:
+        host.ip: '%host.ip%'
+        Image|endswith: '\whoami.exe'
+      filter:
+        ProcessGuid: '{event_data.process.entity_id}'
+      condition: selection and not filter
+    fields:
+      - CommandLine
+      - User
+      - ParentImage
+- question: What files were created or modified on this host within 15 minutes of the whoami execution?
+  context: Identifies potential follow-on activity such as payload staging, credential dumping, or persistence establishment.
+  range: +/-15m
+  query: |
+    aggregation: false
+    logsource:
+      category: file_event
+      product: windows
+    detection:
+      selection:
+        host.ip: '%host.ip%'
+      condition: selection
+    fields:
+      - TargetFilename
+      - Image
+      - User
+      - ProcessGuid
+- question: What network connections occurred within 15 minutes of the whoami execution?
+  context: Reveals potential command and control communications or lateral movement following privilege verification.
+  range: +/-15m
+  query: |
+    aggregation: false
+    logsource:
+      category: network_connection
+      product: windows
+    detection:
+      selection:
+        host.ip: '%host.ip%'
+      condition: selection
+    fields:
+      - Image
+      - DestinationIp
+      - DestinationPort
+      - User
+- question: Did the same user account execute whoami on other hosts?
+  context: Assesses whether this is part of broader reconnaissance activity across multiple systems.
+  range: +/-1h
+  query: |
+    aggregation: false
+    logsource:
+      category: process_creation
+      product: windows
+    detection:
+      selection:
+        User: '{event_data.user.name}'
+        Image|endswith: '\whoami.exe'
+      filter:
+        host.ip: '%host.ip%'
+      condition: selection and not filter
+    fields:
+      - Hostname
+      - CommandLine
+      - ParentImage
+- question: What persistence mechanisms were established around the time of privilege enumeration?
+  context: Identifies potential persistence establishment following privilege escalation verification.
+  range: +/-30m
+  query: |
+    aggregation: false
+    logsource:
+      category: process_creation
+      product: windows
+    detection:
+      selection:
+        host.ip: '%host.ip%'
+        Image|endswith:
+          - '\sc.exe'
+          - '\schtasks.exe'
+          - '\reg.exe'
+          - '\wmic.exe'
+      condition: selection
+    fields:
+      - Image
+      - CommandLine
+      - User
+      - ParentImage
