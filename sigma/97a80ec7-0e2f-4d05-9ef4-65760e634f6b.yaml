@@ -54,7 +54,7 @@ questions:
       product: windows
     detection:
       selection:
-        host.ip: '%host.ip%'
+        host.name: '%event_data.host.name%'
         User: '{event_data.user.name}'
       filter:
         ProcessGuid: '{event_data.process.entity_id}'
@@ -74,7 +74,7 @@ questions:
       product: windows
     detection:
       selection:
-        host.ip: '%host.ip%'
+        host.name: '%event_data.host.name%'
         User: '{event_data.user.name}'
         Image|endswith:
           - '\whoami.exe'
@@ -121,7 +121,7 @@ questions:
       product: windows
     detection:
       selection:
-        host.ip: '%host.ip%'
+        host.name: '%event_data.host.name%'
         Image|endswith: '\whoami.exe'
       filter:
         ProcessGuid: '{event_data.process.entity_id}'
@@ -140,7 +140,7 @@ questions:
       product: windows
     detection:
       selection:
-        host.ip: '%host.ip%'
+        host.name: '%event_data.host.name%'
       condition: selection
     fields:
       - TargetFilename
@@ -157,7 +157,7 @@ questions:
       product: windows
     detection:
       selection:
-        host.ip: '%host.ip%'
+        host.name: '%event_data.host.name%'
       condition: selection
     fields:
       - Image
@@ -177,7 +177,7 @@ questions:
         User: '{event_data.user.name}'
         Image|endswith: '\whoami.exe'
       filter:
-        host.ip: '%host.ip%'
+        host.name: '%event_data.host.name%'
       condition: selection and not filter
     fields:
       - Hostname
@@ -193,7 +193,7 @@ questions:
       product: windows
     detection:
       selection:
-        host.ip: '%host.ip%'
+        host.name: '%event_data.host.name%'
         Image|endswith:
           - '\sc.exe'
           - '\schtasks.exe'
