@@ -1,0 +1,264 @@
+name: WMI Backdoor Exchange Transport Agent
+id: 1500074
+description: |
+  Detects WMI-based persistence mechanism targeting Exchange Transport Agents. This technique uses WMI event
+  filters to persist Exchange Transport Agent code instead of the traditional agents.config file, making remediation
+  more difficult. Transport Agents are extensions that run within the Exchange transport pipeline and can intercept
+  and modify email messages. When EdgeTransport.exe spawns unusual child processes beyond expected utilities like
+  conhost.exe and OleConverter.exe, it indicates potential WMI event filter execution or other persistence mechanisms.
+  The technique was documented by FireEye researchers who discovered that WMI persistence survives Transport Agent
+  removal and requires Exchange server restart for complete remediation. This method provides persistent access to
+  email communications and can be used for data exfiltration or email manipulation.
+type: detection
+detection_id: 797011dc-44f4-4e6f-9f10-a8ceefbe566b
+detection_category: ''
+detection_type: sigma
+contributors:
+- SecurityOnionSolutions
+created: 2025-01-15
+questions:
+- question: What process was spawned by EdgeTransport.exe on this Exchange server?
+  context: Identifies the specific child process indicating WMI persistence or other backdoor activity.
+  range: +/-5m
+  query: |
+    aggregation: false
+    logsource:
+      category: process_creation
+      product: windows
+    detection:
+      selection:
+        ProcessGuid: '{event_data.process.entity_id}'
+      condition: selection
+    fields:
+      - User
+      - hostname
+      - Image
+      - CommandLine
+      - ParentImage
+- question: What was the full command line of the process spawned by EdgeTransport.exe?
+  context: Reveals the specific command or script executed through the WMI backdoor mechanism.
+  range: +/-5m
+  query: |
+    aggregation: false
+    logsource:
+      category: process_creation
+      product: windows
+    detection:
+      selection:
+        ProcessGuid: '{event_data.process.entity_id}'
+      condition: selection
+    fields:
+      - User
+      - CommandLine
+      - ParentCommandLine
+- question: Have multiple processes been spawned by EdgeTransport.exe on this server?
+  context: Determines if this is part of repeated execution or sustained backdoor activity.
+  range: +/-24h
+  query: |
+    aggregation: false
+    logsource:
+      category: process_creation
+      product: windows
+    detection:
+      selection:
+        hostname: '{event_data.host.name}'
+        ParentImage|endswith: '\EdgeTransport.exe'
+      filter:
+        Image:
+          - 'C:\Windows\System32\conhost.exe'
+          - 'C:\Program Files\Microsoft\Exchange Server\V15\Bin\OleConverter.exe'
+      filter_process:
+        ProcessGuid: '{event_data.process.entity_id}'
+      condition: selection and not 1 of filter*
+    fields:
+      - User
+      - Image
+      - CommandLine
+- question: Are there WMI event filters or consumers configured on this Exchange server?
+  context: Identifies the WMI persistence mechanism used to trigger Transport Agent code execution.
+  range: +/-24h
+  query: |
+    aggregation: false
+    logsource:
+      category: process_creation
+      product: windows
+    detection:
+      selection:
+        hostname: '{event_data.host.name}'
+        CommandLine|contains:
+          - '__EventFilter'
+          - '__EventConsumer'
+          - '__FilterToConsumerBinding'
+          - 'ActiveScriptEventConsumer'
+          - 'CommandLineEventConsumer'
+      condition: selection
+    fields:
+      - User
+      - Image
+      - CommandLine
+      - ParentImage
+- question: Were Transport Agent configuration files modified on this Exchange server?
+  context: Detects traditional Transport Agent installation alongside or separate from WMI persistence.
+  range: +/-24h
+  query: |
+    aggregation: false
+    logsource:
+      category: file_event
+      product: windows
+    detection:
+      selection:
+        hostname: '{event_data.host.name}'
+        TargetFilename|contains:
+          - '\TransportRoles\Agents\'
+          - 'agents.config'
+      condition: selection
+    fields:
+      - User
+      - Image
+      - TargetFilename
+      - ProcessGuid
+- question: Were DLLs or assemblies written to Exchange Transport Agent directories?
+  context: Identifies custom Transport Agent code deployment for email interception or manipulation.
+  range: +/-24h
+  query: |
+    aggregation: false
+    logsource:
+      category: file_event
+      product: windows
+    detection:
+      selection:
+        hostname: '{event_data.host.name}'
+        TargetFilename|contains: '\TransportRoles\Agents\'
+        TargetFilename|endswith:
+          - '.dll'
+          - '.exe'
+      condition: selection
+    fields:
+      - User
+      - Image
+      - TargetFilename
+      - ProcessGuid
+- question: What network connections occurred from processes spawned by EdgeTransport.exe?
+  context: Reveals C2 communications or data exfiltration channels established through the backdoor.
+  range: +1h
+  query: |
+    aggregation: false
+    logsource:
+      category: network_connection
+      product: windows
+    detection:
+      selection:
+        ParentProcessGuid: '{event_data.process.entity_id}'
+      condition: selection
+    fields:
+      - User
+      - Image
+      - DestinationIp
+      - DestinationPort
+      - ProcessGuid
+- question: Did child processes spawn additional tools or interpreters?
+  context: Tracks post-execution activity and follow-on commands executed through the backdoor.
+  range: +2h
+  query: |
+    aggregation: false
+    logsource:
+      category: process_creation
+      product: windows
+    detection:
+      selection:
+        ParentProcessGuid: '{event_data.process.entity_id}'
+      condition: selection
+    fields:
+      - User
+      - Image
+      - CommandLine
+      - ParentImage
+- question: Have other Exchange servers in the environment exhibited similar EdgeTransport.exe spawning patterns?
+  context: Reveals campaign-wide Transport Agent backdoor deployment across multiple Exchange servers.
+  range: +/-24h
+  query: |
+    aggregation: false
+    logsource:
+      category: process_creation
+      product: windows
+    detection:
+      selection:
+        ParentImage|endswith: '\EdgeTransport.exe'
+      filter:
+        Image:
+          - 'C:\Windows\System32\conhost.exe'
+          - 'C:\Program Files\Microsoft\Exchange Server\V15\Bin\OleConverter.exe'
+      filter_host:
+        hostname: '{event_data.host.name}'
+      condition: selection and not 1 of filter*
+    fields:
+      - hostname
+      - User
+      - Image
+      - CommandLine
+- question: Were PowerShell or scripting activities observed around the time of the EdgeTransport.exe spawn?
+  context: Identifies script-based installation or configuration of the WMI persistence mechanism.
+  range: +/-1h
+  query: |
+    aggregation: false
+    logsource:
+      category: process_creation
+      product: windows
+    detection:
+      selection:
+        hostname: '{event_data.host.name}'
+        Image|endswith:
+          - '\powershell.exe'
+          - '\pwsh.exe'
+          - '\cscript.exe'
+          - '\wscript.exe'
+        CommandLine|contains:
+          - 'WMI'
+          - 'EventFilter'
+          - 'EventConsumer'
+          - 'Transport'
+      condition: selection
+    fields:
+      - User
+      - Image
+      - CommandLine
+      - ParentImage
+- question: Has the Exchange server been restarted recently?
+  context: Transport Agent infections require Exchange restart for remediation; recent restarts may indicate remediation attempts.
+  range: -7d
+  query: |
+    aggregation: false
+    logsource:
+      category: process_creation
+      product: windows
+    detection:
+      selection:
+        hostname: '{event_data.host.name}'
+        Image|endswith: '\shutdown.exe'
+        CommandLine|contains:
+          - '/r'
+          - '-r'
+          - 'restart'
+      condition: selection
+    fields:
+      - User
+      - CommandLine
+- question: Did the same user account interact with EdgeTransport.exe on other Exchange servers?
+  context: Tracks cross-server activity to determine if compromised credentials are being used for widespread backdoor deployment.
+  range: +/-24h
+  query: |
+    aggregation: false
+    logsource:
+      category: process_creation
+      product: windows
+    detection:
+      selection:
+        User: '{event_data.user.name}'
+        ParentImage|endswith: '\EdgeTransport.exe'
+      filter:
+        hostname: '{event_data.host.name}'
+      condition: selection and not filter
+    fields:
+      - hostname
+      - Image
+      - CommandLine

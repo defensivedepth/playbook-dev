@@ -1,0 +1,207 @@
+name: Persistence Via Sticky Key Backdoor
+id: 1500051
+description: |
+  Detects the file replacement variant of the sticky key backdoor, where cmd.exe is copied over sethc.exe to enable pre-authentication system-level access. This technique allows execution of a privileged command prompt when the sticky keys are activated (pressing Shift five times) at the login screen, bypassing authentication requirements. This is a post-compromise technique used for persistence and privilege escalation, seen in campaigns like APT29 and Fox Kitten.
+type: detection
+detection_id: 1070db9a-3e5d-412e-8e7b-7183b616e1b3
+detection_category: ''
+detection_type: sigma
+contributors:
+- SecurityOnionSolutions
+created: 2025-10-15
+questions:
+- question: What was the full copy command used to replace sethc.exe?
+  context: Reveals the exact command and path used to establish the backdoor.
+  range: +/-15m
+  query: |
+    aggregation: false
+    logsource:
+      category: process_creation
+      product: windows
+    detection:
+      selection:
+        ProcessGuid: '{event_data.process.entity_id}'
+      condition: selection
+    fields:
+      - User
+      - Image
+      - CommandLine
+      - hostname
+- question: What process executed the sethc.exe file replacement command?
+  context: Identifies the parent process chain and execution context.
+  range: +/-15m
+  query: |
+    aggregation: false
+    logsource:
+      category: process_creation
+      product: windows
+    detection:
+      selection:
+        ProcessGuid: '{event_data.process.parent.entity_id}'
+      condition: selection
+    fields:
+      - User
+      - Image
+      - CommandLine
+      - ParentImage
+- question: Has the sethc.exe file been modified or replaced on this host?
+  context: Confirms file-level evidence of the backdoor installation by detecting file write events to sethc.exe.
+  range: -30m
+  query: |
+    aggregation: false
+    logsource:
+      category: file_event
+      product: windows
+    detection:
+      selection:
+        TargetFilename: 'C:\windows\system32\sethc.exe'
+      condition: selection
+    fields:
+      - User
+      - Image
+      - TargetFilename
+      - ProcessGuid
+- question: Has sethc.exe executed since the file replacement occurred?
+  context: Determines if the backdoor has been activated post-installation.
+  range: +24h
+  query: |
+    aggregation: false
+    logsource:
+      category: process_creation
+      product: windows
+    detection:
+      selection:
+        hostname: '{event_data.host.name}'
+        Image|endswith: '\sethc.exe'
+      condition: selection
+    fields:
+      - User
+      - Image
+      - CommandLine
+      - ParentImage
+- question: Were other accessibility tool binaries replaced using similar copy commands?
+  context: Detects broader installation of accessibility suite backdoors beyond sethc.exe.
+  range: +/-2h
+  query: |
+    aggregation: false
+    logsource:
+      category: process_creation
+      product: windows
+    detection:
+      selection:
+        hostname: '{event_data.host.name}'
+        CommandLine|contains:
+          - 'copy '
+          - '/y '
+        CommandLine|contains:
+          - 'utilman.exe'
+          - 'osk.exe'
+          - 'Magnify.exe'
+          - 'Narrator.exe'
+          - 'DisplaySwitch.exe'
+      condition: selection
+    fields:
+      - User
+      - Image
+      - CommandLine
+- question: What child processes were spawned after the copy command execution?
+  context: Tracks follow-on activity and additional backdoor installation steps.
+  range: +1h
+  query: |
+    aggregation: false
+    logsource:
+      category: process_creation
+      product: windows
+    detection:
+      selection:
+        ParentProcessGuid: '{event_data.process.entity_id}'
+      condition: selection
+    fields:
+      - User
+      - Image
+      - CommandLine
+      - ParentImage
+- question: What process activity occurred on this host in the 30 minutes before the file replacement?
+  context: Identifies the initial access or privilege escalation that led to backdoor installation.
+  range: -30m
+  query: |
+    aggregation: false
+    logsource:
+      category: process_creation
+      product: windows
+    detection:
+      selection:
+        hostname: '{event_data.host.name}'
+      condition: selection
+    fields:
+      - User
+      - Image
+      - CommandLine
+- question: Are there registry debugger entries set for accessibility tools on this host?
+  context: Detects the alternative registry-based sticky key backdoor variant that may coexist.
+  range: +/-24h
+  query: |
+    aggregation: false
+    logsource:
+      category: registry_event
+      product: windows
+    detection:
+      selection:
+        TargetObject|contains:
+          - '\Image File Execution Options\sethc.exe'
+          - '\Image File Execution Options\utilman.exe'
+          - '\Image File Execution Options\osk.exe'
+        TargetObject|endswith: '\Debugger'
+      condition: selection
+    fields:
+      - User
+      - Image
+      - TargetObject
+      - Details
+- question: Has this user account performed sethc.exe replacement on other hosts?
+  context: Identifies lateral movement or campaign scope using the same persistence technique.
+  range: -7d
+  query: |
+    aggregation: false
+    logsource:
+      category: process_creation
+      product: windows
+    detection:
+      selection:
+        User: '{event_data.user.name}'
+        CommandLine|contains|all:
+          - 'copy '
+          - 'sethc.exe'
+      filter:
+        hostname: '{event_data.host.name}'
+      condition: selection and not filter
+    fields:
+      - hostname
+      - Image
+      - CommandLine
+- question: Are there other hosts showing cmd.exe being copied to accessibility binaries?
+  context: Detects campaign-wide deployment of sticky key backdoors.
+  range: +/-24h
+  query: |
+    aggregation: false
+    logsource:
+      category: process_creation
+      product: windows
+    detection:
+      selection:
+        CommandLine|contains|all:
+          - 'copy '
+          - '/y '
+          - 'cmd.exe'
+        CommandLine|contains:
+          - 'sethc.exe'
+          - 'utilman.exe'
+          - 'osk.exe'
+      filter:
+        hostname: '{event_data.host.name}'
+      condition: selection and not filter
+    fields:
+      - hostname
+      - User
+      - Image
+      - CommandLine

@@ -1,0 +1,174 @@
+name: HackTool - PurpleSharp Execution
+id: 1500058
+description: |
+  Detects the execution of PurpleSharp, an adversary simulation tool written in C# that executes ATT&CK techniques within Windows Active Directory environments for detection engineering purposes. PurpleSharp simulates 47+ unique ATT&CK techniques across the attack lifecycle including execution, persistence, privilege escalation, credential access, and lateral movement. While designed for legitimate purple team operations and detection testing, the tool can be used for unauthorized security testing or reconnaissance. The tool may be renamed but typically retains indicators like the xyz123456.exe default output name or PurpleSharp in command-line parameters.
+type: detection
+detection_id: ff23ffbc-3378-435e-992f-0624dcf93ab4
+detection_category: ''
+detection_type: sigma
+contributors:
+- SecurityOnionSolutions
+created: 2025-10-15
+questions:
+- question: What was the full PurpleSharp command line and execution parameters?
+  context: Reveals which ATT&CK techniques or playbooks were simulated during execution.
+  range: +/-15m
+  query: |
+    aggregation: false
+    logsource:
+      category: process_creation
+      product: windows
+    detection:
+      selection:
+        ProcessGuid: '{event_data.process.entity_id}'
+      condition: selection
+    fields:
+      - User
+      - Image
+      - CommandLine
+      - hostname
+- question: What process executed the PurpleSharp tool?
+  context: Identifies the parent process chain and execution context.
+  range: +/-15m
+  query: |
+    aggregation: false
+    logsource:
+      category: process_creation
+      product: windows
+    detection:
+      selection:
+        ProcessGuid: '{event_data.process.parent.entity_id}'
+      condition: selection
+    fields:
+      - User
+      - Image
+      - CommandLine
+      - ParentImage
+- question: What child processes were spawned by PurpleSharp during simulation?
+  context: Identifies the specific ATT&CK techniques executed as part of the adversary simulation.
+  range: +2h
+  query: |
+    aggregation: false
+    logsource:
+      category: process_creation
+      product: windows
+    detection:
+      selection:
+        ParentProcessGuid: '{event_data.process.entity_id}'
+      condition: selection
+    fields:
+      - User
+      - Image
+      - CommandLine
+      - ParentImage
+- question: What registry modifications occurred during PurpleSharp execution?
+  context: Detects persistence and privilege escalation techniques simulated by PurpleSharp.
+  range: +2h
+  query: |
+    aggregation: false
+    logsource:
+      category: registry_event
+      product: windows
+    detection:
+      selection:
+        hostname: '{event_data.host.name}'
+      condition: selection
+    fields:
+      - User
+      - Image
+      - TargetObject
+      - Details
+      - EventType
+- question: What network connections occurred during PurpleSharp simulation?
+  context: Reveals lateral movement or C2 techniques executed during the adversary simulation.
+  range: +2h
+  query: |
+    aggregation: false
+    logsource:
+      category: network_connection
+      product: windows
+    detection:
+      selection:
+        hostname: '{event_data.host.name}'
+      condition: selection
+    fields:
+      - User
+      - Image
+      - DestinationIp
+      - DestinationPort
+      - ProcessGuid
+- question: What files were created or modified during PurpleSharp execution?
+  context: Identifies payload staging, credential dumping artifacts, or simulated malware drops.
+  range: +2h
+  query: |
+    aggregation: false
+    logsource:
+      category: file_event
+      product: windows
+    detection:
+      selection:
+        hostname: '{event_data.host.name}'
+      condition: selection
+    fields:
+      - User
+      - Image
+      - TargetFilename
+      - ProcessGuid
+- question: What process activity occurred on this host in the 15 minutes before PurpleSharp execution?
+  context: Identifies the delivery mechanism or how the tool was deployed to the system.
+  range: -15m
+  query: |
+    aggregation: false
+    logsource:
+      category: process_creation
+      product: windows
+    detection:
+      selection:
+        hostname: '{event_data.host.name}'
+      condition: selection
+    fields:
+      - User
+      - Image
+      - CommandLine
+- question: Has this user account executed PurpleSharp on other hosts?
+  context: Identifies scope of testing or campaign deployment across the environment.
+  range: -7d
+  query: |
+    aggregation: false
+    logsource:
+      category: process_creation
+      product: windows
+    detection:
+      selection:
+        User: '{event_data.user.name}'
+        CommandLine|contains:
+          - 'PurpleSharp'
+          - 'xyz123456.exe'
+      filter:
+        hostname: '{event_data.host.name}'
+      condition: selection and not filter
+    fields:
+      - hostname
+      - Image
+      - CommandLine
+- question: Are there other hosts showing PurpleSharp execution activity?
+  context: Detects environment-wide adversary simulation or potential unauthorized security testing.
+  range: +/-24h
+  query: |
+    aggregation: false
+    logsource:
+      category: process_creation
+      product: windows
+    detection:
+      selection:
+        CommandLine|contains:
+          - 'PurpleSharp'
+          - 'xyz123456.exe'
+      filter:
+        hostname: '{event_data.host.name}'
+      condition: selection and not filter
+    fields:
+      - hostname
+      - User
+      - Image
+      - CommandLine

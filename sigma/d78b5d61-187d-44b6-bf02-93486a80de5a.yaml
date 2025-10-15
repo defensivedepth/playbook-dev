@@ -1,0 +1,238 @@
+name: HackTool - DInjector PowerShell Cradle Execution
+id: 1500053
+description: |
+  Detects the use of DInjector PowerShell cradle based on specific command-line flags /am51 and /password. DInjector is a collection of shellcode injection techniques packed in a D/Invoke weaponized DLL, designed to be loaded via PowerShell download cradles as a System.Reflection.Assembly and executed from memory. The tool supports multiple injection modules (FunctionPointer, CurrentThread, RemoteThread, RemoteThreadAPC, RemoteThreadContext, ProcessHollow) that allocate memory, copy shellcode, and execute it using various evasion techniques. The /am51 flag appears to be an AMSI bypass parameter, while /password is used for payload decryption.
+type: detection
+detection_id: d78b5d61-187d-44b6-bf02-93486a80de5a
+detection_category: ''
+detection_type: sigma
+contributors:
+- SecurityOnionSolutions
+created: 2025-10-15
+questions:
+- question: What was the full PowerShell command line with the DInjector cradle flags?
+  context: Reveals the complete invocation including module selection and payload parameters.
+  range: +/-15m
+  query: |
+    aggregation: false
+    logsource:
+      category: process_creation
+      product: windows
+    detection:
+      selection:
+        ProcessGuid: '{event_data.process.entity_id}'
+      condition: selection
+    fields:
+      - User
+      - Image
+      - CommandLine
+      - hostname
+- question: What process executed the PowerShell command with DInjector flags?
+  context: Identifies the parent process chain and execution context.
+  range: +/-15m
+  query: |
+    aggregation: false
+    logsource:
+      category: process_creation
+      product: windows
+    detection:
+      selection:
+        ProcessGuid: '{event_data.process.parent.entity_id}'
+      condition: selection
+    fields:
+      - User
+      - Image
+      - CommandLine
+      - ParentImage
+- question: What DInjector module was specified in the command line?
+  context: Identifies the specific injection technique being used from the DInjector framework.
+  range: +/-15m
+  query: |
+    aggregation: false
+    logsource:
+      category: process_creation
+      product: windows
+    detection:
+      selection:
+        ProcessGuid: '{event_data.process.entity_id}'
+        CommandLine|contains:
+          - 'functionpointer'
+          - 'currentthread'
+          - 'remotethread'
+          - 'remotethreadapc'
+          - 'remotethreadcontext'
+          - 'processhollow'
+      condition: selection
+    fields:
+      - CommandLine
+- question: What URLs or file paths are referenced in the DInjector command for shellcode download?
+  context: Identifies the shellcode source location and staging infrastructure.
+  range: +/-15m
+  query: |
+    aggregation: false
+    logsource:
+      category: process_creation
+      product: windows
+    detection:
+      selection:
+        ProcessGuid: '{event_data.process.entity_id}'
+        CommandLine|contains:
+          - '/sc:http'
+          - '/sc:https'
+          - '/sc:C:\'
+      condition: selection
+    fields:
+      - CommandLine
+- question: What child processes were spawned by the PowerShell DInjector execution?
+  context: Tracks the target process for injection or follow-on post-exploitation activity.
+  range: +2h
+  query: |
+    aggregation: false
+    logsource:
+      category: process_creation
+      product: windows
+    detection:
+      selection:
+        ParentProcessGuid: '{event_data.process.entity_id}'
+      condition: selection
+    fields:
+      - User
+      - Image
+      - CommandLine
+      - ParentImage
+- question: What network connections occurred after the DInjector PowerShell execution?
+  context: Reveals shellcode payload download and potential C2 communications.
+  range: +30m
+  query: |
+    aggregation: false
+    logsource:
+      category: network_connection
+      product: windows
+    detection:
+      selection:
+        ProcessGuid: '{event_data.process.entity_id}'
+      condition: selection
+    fields:
+      - User
+      - Image
+      - DestinationIp
+      - DestinationPort
+- question: What process activity occurred on this host in the 15 minutes before DInjector execution?
+  context: Identifies the initial access or delivery mechanism that led to DInjector deployment.
+  range: -15m
+  query: |
+    aggregation: false
+    logsource:
+      category: process_creation
+      product: windows
+    detection:
+      selection:
+        hostname: '{event_data.host.name}'
+      condition: selection
+    fields:
+      - User
+      - Image
+      - CommandLine
+- question: What other PowerShell executions with suspicious flags occurred on this host?
+  context: Identifies other DInjector invocations or related tooling with similar patterns.
+  range: +/-24h
+  query: |
+    aggregation: false
+    logsource:
+      category: process_creation
+      product: windows
+    detection:
+      selection:
+        hostname: '{event_data.host.name}'
+        Image|endswith:
+          - '\powershell.exe'
+          - '\pwsh.exe'
+        CommandLine|contains:
+          - '/am51'
+          - '/password'
+      condition: selection
+    fields:
+      - User
+      - Image
+      - CommandLine
+- question: Has this user account executed DInjector commands on other hosts?
+  context: Identifies lateral movement or campaign scope using the same injection framework.
+  range: -7d
+  query: |
+    aggregation: false
+    logsource:
+      category: process_creation
+      product: windows
+    detection:
+      selection:
+        User: '{event_data.user.name}'
+        CommandLine|contains|all:
+          - '/am51'
+          - '/password'
+      filter:
+        hostname: '{event_data.host.name}'
+      condition: selection and not filter
+    fields:
+      - hostname
+      - Image
+      - CommandLine
+- question: Are there other hosts showing PowerShell execution with DInjector flags?
+  context: Detects campaign-wide deployment of the DInjector shellcode injection framework.
+  range: +/-24h
+  query: |
+    aggregation: false
+    logsource:
+      category: process_creation
+      product: windows
+    detection:
+      selection:
+        CommandLine|contains|all:
+          - '/am51'
+          - '/password'
+      filter:
+        hostname: '{event_data.host.name}'
+      condition: selection and not filter
+    fields:
+      - hostname
+      - User
+      - Image
+      - CommandLine
+- question: Were any .NET assemblies loaded from remote URLs around the time of execution?
+  context: Detects the DInjector DLL being loaded as a System.Reflection.Assembly from PowerShell cradles.
+  range: +/-30m
+  query: |
+    aggregation: false
+    logsource:
+      category: process_creation
+      product: windows
+    detection:
+      selection:
+        hostname: '{event_data.host.name}'
+        Image|endswith:
+          - '\powershell.exe'
+          - '\pwsh.exe'
+        CommandLine|contains:
+          - 'System.Reflection.Assembly'
+          - 'Load'
+          - 'http'
+      condition: selection
+    fields:
+      - User
+      - Image
+      - CommandLine
+- question: What files were created on this host within 30 minutes after DInjector execution?
+  context: Identifies potential payload staging, dropped files, or persistence artifacts.
+  range: +30m
+  query: |
+    aggregation: false
+    logsource:
+      category: file_event
+      product: windows
+    detection:
+      selection:
+        hostname: '{event_data.host.name}'
+      condition: selection
+    fields:
+      - User
+      - Image
+      - TargetFilename

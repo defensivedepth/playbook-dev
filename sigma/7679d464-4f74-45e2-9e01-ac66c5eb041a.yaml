@@ -1,0 +1,324 @@
+name: HackTool - SecurityXploded Execution
+id: 1500062
+description: |
+  Detects the execution of SecurityXploded password recovery and security tools, which include password dumping utilities for browsers, email clients, instant messengers, wireless networks, and Windows credentials. While SecurityXploded tools are marketed as legitimate password recovery utilities, they are frequently used in APT campaigns and credential theft operations. Notable examples include usage in the Gangnam Industrial Style APT campaign targeting Korean industrial companies, where SecurityXploded tools were combined with spear phishing emails and the Separ credential stealing malware to exfiltrate browser credentials, email passwords, and industrial documents.
+type: detection
+detection_id: 7679d464-4f74-45e2-9e01-ac66c5eb041a
+detection_category: ''
+detection_type: sigma
+contributors:
+- SecurityOnionSolutions
+created: 2025-10-15
+questions:
+- question: What was the full SecurityXploded command line executed on this host?
+  context: Reveals the specific SecurityXploded tool variant and any parameters used.
+  query: |
+    aggregation: false
+    logsource:
+      category: process_creation
+      product: windows
+    detection:
+      selection:
+        ProcessGuid: '{event_data.process.entity_id}'
+      condition: selection
+    fields:
+      - User
+      - hostname
+      - Image
+      - CommandLine
+      - ProcessId
+- question: What process created the SecurityXploded execution?
+  context: Identifies the delivery mechanism or parent process chain.
+  range: -15m
+  query: |
+    aggregation: false
+    logsource:
+      category: process_creation
+      product: windows
+    detection:
+      selection:
+        ProcessGuid: '{event_data.process.parent.entity_id}'
+      condition: selection
+    fields:
+      - User
+      - hostname
+      - Image
+      - CommandLine
+      - ProcessId
+- question: What files were created by the SecurityXploded tool?
+  context: SecurityXploded tools typically create output files containing dumped passwords and credentials.
+  range: +30m
+  query: |
+    aggregation: false
+    logsource:
+      category: file_event
+      product: windows
+    detection:
+      selection:
+        ProcessGuid: '{event_data.process.entity_id}'
+      condition: selection
+    fields:
+      - User
+      - Image
+      - TargetFilename
+      - file.path
+- question: What processes were spawned by the SecurityXploded tool after execution?
+  context: Identifies post-exploitation activity or credential exfiltration attempts.
+  range: +2h
+  query: |
+    aggregation: false
+    logsource:
+      category: process_creation
+      product: windows
+    detection:
+      selection:
+        ParentProcessGuid: '{event_data.process.entity_id}'
+      condition: selection
+    fields:
+      - User
+      - hostname
+      - Image
+      - CommandLine
+      - ProcessId
+- question: What network connections were established by the SecurityXploded tool?
+  context: Identifies credential exfiltration to external FTP servers or C2 infrastructure, as seen in the Gangnam Industrial Style campaign.
+  range: +/-15m
+  query: |
+    aggregation: false
+    logsource:
+      category: network_connection
+      product: windows
+    detection:
+      selection:
+        ProcessGuid: '{event_data.process.entity_id}'
+      condition: selection
+    fields:
+      - User
+      - Image
+      - DestinationIp
+      - DestinationPort
+      - SourceIp
+- question: Were any FTP connections established from this host around the time of execution?
+  context: The Gangnam Industrial Style campaign exfiltrated stolen credentials via FTP to freehostia.com and other hosting services.
+  range: +/-30m
+  query: |
+    aggregation: false
+    logsource:
+      category: network_connection
+      product: windows
+    detection:
+      selection:
+        hostname: '{event_data.host.name}'
+        DestinationPort:
+          - 21
+          - 22
+          - 990
+      condition: selection
+    fields:
+      - User
+      - Image
+      - DestinationIp
+      - DestinationPort
+- question: Were any documents or files accessed before the SecurityXploded execution?
+  context: The Gangnam Industrial Style campaign searched for and exfiltrated Office documents and images containing industrial design information.
+  range: -30m
+  query: |
+    aggregation: false
+    logsource:
+      category: file_event
+      product: windows
+    detection:
+      selection:
+        hostname: '{event_data.host.name}'
+        TargetFilename|endswith:
+          - '.doc'
+          - '.docx'
+          - '.xls'
+          - '.xlsx'
+          - '.pdf'
+          - '.jpg'
+          - '.png'
+      condition: selection
+    fields:
+      - User
+      - Image
+      - TargetFilename
+      - file.path
+- question: Were any other credential dumping or password recovery tools executed on this host within 30 minutes?
+  context: Detects concurrent use of multiple credential access tools in coordinated campaigns.
+  range: +/-30m
+  query: |
+    aggregation: false
+    logsource:
+      category: process_creation
+      product: windows
+    detection:
+      selection:
+        hostname: '{event_data.host.name}'
+        Image|contains:
+          - 'mimikatz'
+          - 'LaZagne'
+          - 'procdump'
+          - 'PasswordDump'
+      filter:
+        ProcessGuid: '{event_data.process.entity_id}'
+      condition: selection and not filter
+    fields:
+      - User
+      - Image
+      - CommandLine
+      - ProcessId
+- question: Did the user open any email attachments with industrial-themed content before this execution?
+  context: The Gangnam Industrial Style campaign used spear phishing emails with RFQs for power plant designs and industrial engineering projects.
+  range: -2h
+  query: |
+    aggregation: false
+    logsource:
+      category: file_event
+      product: windows
+    detection:
+      selection:
+        User: '{event_data.user.name}'
+        TargetFilename|contains:
+          - 'RFQ'
+          - 'power plant'
+          - 'engineering'
+          - 'schematic'
+          - 'design'
+        TargetFilename|endswith:
+          - '.pdf'
+          - '.doc'
+          - '.docx'
+      condition: selection
+    fields:
+      - Image
+      - TargetFilename
+      - file.path
+- question: Is SecurityXploded execution typical for this user account in the past 30 days?
+  context: Distinguishes authorized password recovery from unauthorized credential theft.
+  range: -30d
+  query: |
+    aggregation: false
+    logsource:
+      category: process_creation
+      product: windows
+    detection:
+      selection:
+        User: '{event_data.user.name}'
+        Company: 'SecurityXploded'
+      filter:
+        ProcessGuid: '{event_data.process.entity_id}'
+      condition: selection and not filter
+    fields:
+      - hostname
+      - Image
+      - CommandLine
+      - ProcessId
+- question: What other hosts on the network have executed SecurityXploded tools in the past 24 hours?
+  context: Reveals scope of credential theft campaign across multiple systems, as seen in widespread APT targeting of Korean industrial companies.
+  range: -24h
+  query: |
+    aggregation: false
+    logsource:
+      category: process_creation
+      product: windows
+    detection:
+      selection:
+        Company: 'SecurityXploded'
+      filter:
+        hostname: '{event_data.host.name}'
+      condition: selection and not filter
+    fields:
+      - User
+      - hostname
+      - Image
+      - CommandLine
+- question: Did the same user account execute SecurityXploded tools on other hosts in the past 7 days?
+  context: Tracks lateral movement and credential reuse patterns in multi-host campaigns.
+  range: -7d
+  query: |
+    aggregation: false
+    logsource:
+      category: process_creation
+      product: windows
+    detection:
+      selection:
+        User: '{event_data.user.name}'
+        Company: 'SecurityXploded'
+      filter:
+        hostname: '{event_data.host.name}'
+      condition: selection and not filter
+    fields:
+      - hostname
+      - Image
+      - CommandLine
+      - ProcessId
+- question: Were any browser credential stores accessed around the time of execution?
+  context: SecurityXploded tools target browser password stores including Chrome, Firefox, Internet Explorer, and Edge.
+  range: +/-30m
+  query: |
+    aggregation: false
+    logsource:
+      category: file_event
+      product: windows
+    detection:
+      selection:
+        hostname: '{event_data.host.name}'
+        TargetFilename|contains:
+          - 'Login Data'
+          - 'logins.json'
+          - 'key3.db'
+          - 'key4.db'
+          - 'Credentials'
+          - 'Web Data'
+      condition: selection
+    fields:
+      - User
+      - Image
+      - TargetFilename
+      - file.path
+- question: Were any email client credential stores accessed around the time of execution?
+  context: SecurityXploded tools dump passwords from Outlook, Thunderbird, and other email clients.
+  range: +/-30m
+  query: |
+    aggregation: false
+    logsource:
+      category: file_event
+      product: windows
+    detection:
+      selection:
+        hostname: '{event_data.host.name}'
+        TargetFilename|contains:
+          - '\Outlook\'
+          - '\Thunderbird\'
+          - '.ost'
+          - '.pst'
+          - 'prefs.js'
+      condition: selection
+    fields:
+      - User
+      - Image
+      - TargetFilename
+      - file.path
+- question: Were any registry keys related to stored credentials accessed after execution?
+  context: SecurityXploded tools access registry keys containing Windows credentials, RDP passwords, and wireless network keys.
+  range: +1h
+  query: |
+    aggregation: false
+    logsource:
+      category: registry_event
+      product: windows
+    detection:
+      selection:
+        ProcessGuid: '{event_data.process.entity_id}'
+        TargetObject|contains:
+          - '\Software\Microsoft\Windows NT\CurrentVersion\Winlogon'
+          - '\Software\Microsoft\Terminal Server Client'
+          - '\Software\Microsoft\Windows\CurrentVersion\Internet Settings'
+      condition: selection
+    fields:
+      - User
+      - Image
+      - TargetObject
+      - Details
+      - EventType

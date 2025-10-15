@@ -1,0 +1,315 @@
+name: HackTool - Windows Credential Editor (WCE) Execution
+id: 1500067
+description: |
+  Detects execution of Windows Credential Editor (WCE), a security tool used to list logon sessions
+  and manipulate associated credentials including LM/NT hashes, plaintext passwords, and Kerberos tickets.
+  WCE can perform pass-the-hash attacks, extract credentials from memory (interactive logons, services,
+  remote desktop connections), obtain and reuse Kerberos tickets across Windows and Unix systems, and
+  dump cleartext passwords. The tool is commonly used by penetration testers for security assessments
+  but may also indicate credential theft activity. Detection focuses on specific import hash signatures
+  and service execution patterns characteristic of WCE.
+type: detection
+detection_id: 7aa7009a-28b9-4344-8c1f-159489a390df
+detection_category: ''
+detection_type: sigma
+contributors:
+- SecurityOnionSolutions
+created: 2025-01-15
+questions:
+- question: What was the full command line used when WCE was executed on this host?
+  context: Identifies the specific WCE operation performed (credential dumping, hash injection, Kerberos ticket manipulation).
+  range: +/-5m
+  query: |
+    aggregation: false
+    logsource:
+      category: process_creation
+      product: windows
+    detection:
+      selection:
+        ProcessGuid: '{event_data.process.entity_id}'
+      condition: selection
+    fields:
+      - User
+      - hostname
+      - Image
+      - CommandLine
+      - IntegrityLevel
+- question: What process spawned the WCE execution?
+  context: Determines the delivery mechanism and parent process chain for the credential access tool.
+  range: -15m
+  query: |
+    aggregation: false
+    logsource:
+      category: process_creation
+      product: windows
+    detection:
+      selection:
+        ProcessGuid: '{event_data.process.parent.entity_id}'
+      condition: selection
+    fields:
+      - User
+      - hostname
+      - Image
+      - CommandLine
+      - ParentImage
+- question: Was WCE executed as a service using the -S command line switch?
+  context: Identifies service-based execution patterns where WCE runs as a Windows service for persistence.
+  range: +/-15m
+  query: |
+    aggregation: false
+    logsource:
+      category: process_creation
+      product: windows
+    detection:
+      selection:
+        ProcessGuid: '{event_data.process.entity_id}'
+        CommandLine|contains: '-S'
+      condition: selection
+    fields:
+      - User
+      - Image
+      - CommandLine
+      - ParentImage
+- question: Has WCE been executed on other hosts in the environment?
+  context: Reveals potential multi-host credential harvesting campaign or lateral movement activity.
+  range: +/-24h
+  query: |
+    aggregation: false
+    logsource:
+      category: process_creation
+      product: windows
+    detection:
+      selection:
+        Hashes|contains:
+          - 'IMPHASH=a53a02b997935fd8eedcb5f7abab9b9f'
+          - 'IMPHASH=e96a73c7bf33a464c510ede582318bf2'
+      filter:
+        hostname: '{event_data.host.name}'
+      condition: selection and not filter
+    fields:
+      - hostname
+      - User
+      - Image
+      - CommandLine
+- question: What process activity occurred on this host in the 15 minutes before WCE execution?
+  context: Identifies preparatory activity and delivery mechanisms preceding credential access.
+  range: -15m
+  query: |
+    aggregation: false
+    logsource:
+      category: process_creation
+      product: windows
+    detection:
+      selection:
+        hostname: '{event_data.host.name}'
+      condition: selection
+    fields:
+      - User
+      - Image
+      - CommandLine
+      - ParentImage
+- question: Did WCE spawn any child processes after execution?
+  context: Reveals post-credential-dump activity such as pass-the-hash attempts or lateral movement tools.
+  range: +2h
+  query: |
+    aggregation: false
+    logsource:
+      category: process_creation
+      product: windows
+    detection:
+      selection:
+        ParentProcessGuid: '{event_data.process.entity_id}'
+      condition: selection
+    fields:
+      - User
+      - Image
+      - CommandLine
+      - ParentImage
+      - IntegrityLevel
+- question: What files were created or modified on this host within 30 minutes of WCE execution?
+  context: Identifies credential dumps written to disk or staging locations for exfiltration.
+  range: +/-30m
+  query: |
+    aggregation: false
+    logsource:
+      category: file_event
+      product: windows
+    detection:
+      selection:
+        hostname: '{event_data.host.name}'
+      condition: selection
+    fields:
+      - User
+      - Image
+      - TargetFilename
+      - ProcessGuid
+- question: What network connections occurred after WCE execution?
+  context: Reveals potential credential exfiltration, C2 communications, or lateral movement attempts.
+  range: +1h
+  query: |
+    aggregation: false
+    logsource:
+      category: network_connection
+      product: windows
+    detection:
+      selection:
+        hostname: '{event_data.host.name}'
+      condition: selection
+    fields:
+      - User
+      - Image
+      - DestinationIp
+      - DestinationPort
+      - ProcessGuid
+- question: Were any authentication events using NTLM or Kerberos observed after WCE execution?
+  context: Detects pass-the-hash or pass-the-ticket attacks using credentials harvested by WCE.
+  range: +2h
+  query: |
+    aggregation: false
+    logsource:
+      category: process_creation
+      product: windows
+    detection:
+      selection:
+        hostname: '{event_data.host.name}'
+        Image|endswith:
+          - '\net.exe'
+          - '\net1.exe'
+          - '\psexec.exe'
+          - '\wmic.exe'
+          - '\powershell.exe'
+      condition: selection
+    fields:
+      - User
+      - Image
+      - CommandLine
+      - DestinationIp
+- question: Did services.exe spawn any other suspicious processes with single character command line switches?
+  context: Identifies other service-based execution patterns similar to WCE that may be related activity.
+  range: +/-1h
+  query: |
+    aggregation: false
+    logsource:
+      category: process_creation
+      product: windows
+    detection:
+      selection:
+        hostname: '{event_data.host.name}'
+        ParentImage|endswith: '\services.exe'
+        CommandLine|re: '\.exe\s+-[A-Za-z]$'
+      filter:
+        Image|endswith: '\clussvc.exe'
+      condition: selection and not filter
+    fields:
+      - User
+      - Image
+      - CommandLine
+      - ParentImage
+- question: Did the same user account execute WCE on other hosts in the environment?
+  context: Tracks cross-host activity to determine if credential harvesting is part of coordinated campaign.
+  range: +/-24h
+  query: |
+    aggregation: false
+    logsource:
+      category: process_creation
+      product: windows
+    detection:
+      selection:
+        User: '{event_data.user.name}'
+        Hashes|contains:
+          - 'IMPHASH=a53a02b997935fd8eedcb5f7abab9b9f'
+          - 'IMPHASH=e96a73c7bf33a464c510ede582318bf2'
+      filter:
+        hostname: '{event_data.host.name}'
+      condition: selection and not filter
+    fields:
+      - hostname
+      - Image
+      - CommandLine
+- question: Are there lateral movement indicators such as remote service creation or PsExec execution after WCE?
+  context: Detects use of harvested credentials for lateral movement across the environment.
+  range: +2h
+  query: |
+    aggregation: false
+    logsource:
+      category: process_creation
+      product: windows
+    detection:
+      selection:
+        hostname: '{event_data.host.name}'
+        Image|endswith:
+          - '\psexec.exe'
+          - '\psexec64.exe'
+          - '\paexec.exe'
+          - '\sc.exe'
+      condition: selection
+    fields:
+      - User
+      - Image
+      - CommandLine
+      - ParentImage
+- question: Are there named pipes associated with credential access or lateral movement tools?
+  context: WCE and related tools often create named pipes for inter-process communication during credential operations.
+  range: +/-1h
+  query: |
+    aggregation: false
+    logsource:
+      category: process_creation
+      product: windows
+    detection:
+      selection:
+        hostname: '{event_data.host.name}'
+        CommandLine|contains:
+          - '\pipe\'
+          - 'CreateNamedPipe'
+      condition: selection
+    fields:
+      - User
+      - Image
+      - CommandLine
+      - ParentImage
+- question: What files were downloaded or written to disk in the 30 minutes before WCE execution?
+  context: Identifies the delivery method for WCE such as browser downloads, remote file transfers, or staged payloads.
+  range: -30m
+  query: |
+    aggregation: false
+    logsource:
+      category: file_event
+      product: windows
+    detection:
+      selection:
+        hostname: '{event_data.host.name}'
+        TargetFilename|endswith:
+          - '.exe'
+          - '.zip'
+          - '.rar'
+          - '.7z'
+      condition: selection
+    fields:
+      - User
+      - Image
+      - TargetFilename
+      - ProcessGuid
+- question: Are there other credential access tools or processes with suspicious import hashes on this host?
+  context: Identifies additional credential theft tools that may be part of the same campaign.
+  range: +/-24h
+  query: |
+    aggregation: false
+    logsource:
+      category: process_creation
+      product: windows
+    detection:
+      selection:
+        hostname: '{event_data.host.name}'
+        Image|endswith:
+          - '\mimikatz.exe'
+          - '\procdump.exe'
+          - '\pwdump.exe'
+          - '\gsecdump.exe'
+          - '\fgdump.exe'
+      condition: selection
+    fields:
+      - User
+      - Image
+      - CommandLine
+      - Hashes

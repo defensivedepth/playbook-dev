@@ -1,0 +1,238 @@
+name: HackTool - Dumpert Process Dumper Execution
+id: 1500054
+description: |
+  Detects the execution of Dumpert, an LSASS memory dumper that uses direct system calls and API unhooking to evade antivirus and EDR solutions. Dumpert dumps the lsass.exe process memory to extract credentials, employing techniques that bypass user-mode API hooks by making direct system calls to ntdll.dll functions like NtAllocateVirtualMemory and NtProtectVirtualMemory. The tool can be executed as a standalone executable or loaded as a DLL via rundll32.exe with the exported Dump function. Dumpert has been observed in targeted attacks against government organizations following SharePoint exploitation.
+type: detection
+detection_id: 2704ab9e-afe2-4854-a3b1-0c0706d03578
+detection_category: ''
+detection_type: sigma
+contributors:
+- SecurityOnionSolutions
+created: 2025-10-15
+questions:
+- question: What was the full command line used to execute Dumpert?
+  context: Reveals the exact execution method and parameters used for the LSASS dump.
+  range: +/-15m
+  query: |
+    aggregation: false
+    logsource:
+      category: process_creation
+      product: windows
+    detection:
+      selection:
+        ProcessGuid: '{event_data.process.entity_id}'
+      condition: selection
+    fields:
+      - User
+      - Image
+      - CommandLine
+      - hostname
+- question: What process executed the Dumpert command?
+  context: Identifies the parent process chain and execution context.
+  range: +/-15m
+  query: |
+    aggregation: false
+    logsource:
+      category: process_creation
+      product: windows
+    detection:
+      selection:
+        ProcessGuid: '{event_data.process.parent.entity_id}'
+      condition: selection
+    fields:
+      - User
+      - Image
+      - CommandLine
+      - ParentImage
+- question: Was Dumpert loaded as a DLL via rundll32.exe with the Dump export?
+  context: Confirms the DLL loading method using the exported Dump function.
+  range: +/-15m
+  query: |
+    aggregation: false
+    logsource:
+      category: process_creation
+      product: windows
+    detection:
+      selection:
+        hostname: '{event_data.host.name}'
+        Image|endswith: '\rundll32.exe'
+        CommandLine|contains|all:
+          - 'Dumpert'
+          - 'Dump'
+      condition: selection
+    fields:
+      - User
+      - Image
+      - CommandLine
+- question: What files were created on this host within 15 minutes after Dumpert execution?
+  context: Identifies the LSASS minidump file location and any other artifacts created.
+  range: +15m
+  query: |
+    aggregation: false
+    logsource:
+      category: file_event
+      product: windows
+    detection:
+      selection:
+        hostname: '{event_data.host.name}'
+        TargetFilename|endswith:
+          - '.dmp'
+          - '.bin'
+      condition: selection
+    fields:
+      - User
+      - Image
+      - TargetFilename
+      - ProcessGuid
+- question: What child processes were spawned after the Dumpert execution?
+  context: Tracks follow-on activity and credential usage after the LSASS dump.
+  range: +2h
+  query: |
+    aggregation: false
+    logsource:
+      category: process_creation
+      product: windows
+    detection:
+      selection:
+        ParentProcessGuid: '{event_data.process.entity_id}'
+      condition: selection
+    fields:
+      - User
+      - Image
+      - CommandLine
+      - ParentImage
+- question: What network connections occurred within 30 minutes after Dumpert execution?
+  context: Reveals potential exfiltration of the LSASS dump or C2 communications.
+  range: +30m
+  query: |
+    aggregation: false
+    logsource:
+      category: network_connection
+      product: windows
+    detection:
+      selection:
+        hostname: '{event_data.host.name}'
+      condition: selection
+    fields:
+      - User
+      - Image
+      - DestinationIp
+      - DestinationPort
+      - ProcessGuid
+- question: What process activity occurred on this host in the 15 minutes before Dumpert execution?
+  context: Identifies the initial access or delivery mechanism that led to Dumpert deployment.
+  range: -15m
+  query: |
+    aggregation: false
+    logsource:
+      category: process_creation
+      product: windows
+    detection:
+      selection:
+        hostname: '{event_data.host.name}'
+      condition: selection
+    fields:
+      - User
+      - Image
+      - CommandLine
+- question: Were webshells or suspicious ASPX files accessed around the time of Dumpert execution?
+  context: Identifies potential SharePoint exploitation and webshell activity used to deploy Dumpert.
+  range: +/-30m
+  query: |
+    aggregation: false
+    logsource:
+      category: process_creation
+      product: windows
+    detection:
+      selection:
+        hostname: '{event_data.host.name}'
+        CommandLine|contains:
+          - '.aspx'
+          - 'uploadedFiles'
+          - 'layouts'
+      condition: selection
+    fields:
+      - User
+      - Image
+      - CommandLine
+- question: Has this user account executed Dumpert on other hosts?
+  context: Identifies lateral movement or campaign scope using the same credential dumping tool.
+  range: -7d
+  query: |
+    aggregation: false
+    logsource:
+      category: process_creation
+      product: windows
+    detection:
+      selection:
+        User: '{event_data.user.name}'
+        CommandLine|contains: 'Dumpert'
+      filter:
+        hostname: '{event_data.host.name}'
+      condition: selection and not filter
+    fields:
+      - hostname
+      - Image
+      - CommandLine
+- question: Are there other hosts showing Dumpert execution or LSASS dumping activity?
+  context: Detects campaign-wide credential harvesting operations.
+  range: +/-24h
+  query: |
+    aggregation: false
+    logsource:
+      category: process_creation
+      product: windows
+    detection:
+      selection:
+        CommandLine|contains: 'Dumpert'
+      filter:
+        hostname: '{event_data.host.name}'
+      condition: selection and not filter
+    fields:
+      - hostname
+      - User
+      - Image
+      - CommandLine
+- question: Were any Impacket tools executed around the time of Dumpert execution?
+  context: Identifies lateral movement tools used with dumped credentials from Dumpert.
+  range: +/-2h
+  query: |
+    aggregation: false
+    logsource:
+      category: process_creation
+      product: windows
+    detection:
+      selection:
+        hostname: '{event_data.host.name}'
+        CommandLine|contains:
+          - 'wmiexec'
+          - 'atexec'
+          - 'smbexec'
+          - 'dcomexec'
+      condition: selection
+    fields:
+      - User
+      - Image
+      - CommandLine
+- question: Were scheduled tasks or services created after Dumpert execution for persistence?
+  context: Detects persistence mechanisms established after credential harvesting.
+  range: +2h
+  query: |
+    aggregation: false
+    logsource:
+      category: process_creation
+      product: windows
+    detection:
+      selection:
+        hostname: '{event_data.host.name}'
+        Image|endswith:
+          - '\schtasks.exe'
+          - '\sc.exe'
+        CommandLine|contains:
+          - 'create'
+          - '/create'
+      condition: selection
+    fields:
+      - User
+      - Image
+      - CommandLine

@@ -1,0 +1,247 @@
+name: HackTool - Empire PowerShell UAC Bypass
+id: 1500055
+description: |
+  Detects Empire PowerShell UAC bypass methods that leverage registry keys to execute commands with elevated privileges without triggering UAC prompts. The technique uses PowerShell with specific flags (-NoP -NonI -w Hidden) to read a registry value from HKCU:\Software\Microsoft\Windows Update, which contains a payload that executes in a high-integrity context. Empire modules like Invoke-EventVwrBypass and Invoke-FodHelperBypass hijack auto-elevated processes (eventvwr.exe, fodhelper.exe) by creating registry keys that these processes read during execution, allowing arbitrary command execution with elevated privileges.
+type: detection
+detection_id: 3268b746-88d8-4cd3-bffc-30077d02c787
+detection_category: ''
+detection_type: sigma
+contributors:
+- SecurityOnionSolutions
+created: 2025-10-15
+questions:
+- question: What was the full PowerShell command line with the Empire UAC bypass pattern?
+  context: Reveals the exact command and registry key used for the UAC bypass.
+  range: +/-15m
+  query: |
+    aggregation: false
+    logsource:
+      category: process_creation
+      product: windows
+    detection:
+      selection:
+        ProcessGuid: '{event_data.process.entity_id}'
+      condition: selection
+    fields:
+      - User
+      - Image
+      - CommandLine
+      - hostname
+- question: What process executed the PowerShell UAC bypass command?
+  context: Identifies the parent process chain and execution context.
+  range: +/-15m
+  query: |
+    aggregation: false
+    logsource:
+      category: process_creation
+      product: windows
+    detection:
+      selection:
+        ProcessGuid: '{event_data.process.parent.entity_id}'
+      condition: selection
+    fields:
+      - User
+      - Image
+      - CommandLine
+      - ParentImage
+- question: What registry key was created or modified to enable the UAC bypass?
+  context: Identifies the hijacked registry path used by auto-elevated processes.
+  range: -30m
+  query: |
+    aggregation: false
+    logsource:
+      category: registry_event
+      product: windows
+    detection:
+      selection:
+        TargetObject|contains: 'HKCU:\Software\Microsoft\Windows Update'
+      condition: selection
+    fields:
+      - User
+      - Image
+      - TargetObject
+      - Details
+      - EventType
+- question: What payload was stored in the HKCU:\Software\Microsoft\Windows Update registry value?
+  context: Reveals the actual command executed with elevated privileges after UAC bypass.
+  range: +/-30m
+  query: |
+    aggregation: false
+    logsource:
+      category: registry_event
+      product: windows
+    detection:
+      selection:
+        TargetObject|endswith: '\Software\Microsoft\Windows Update\Update'
+      condition: selection
+    fields:
+      - User
+      - Image
+      - TargetObject
+      - Details
+- question: Were auto-elevated processes like eventvwr.exe or fodhelper.exe executed after the registry modification?
+  context: Confirms the UAC bypass execution by detecting the hijacked auto-elevated process.
+  range: +15m
+  query: |
+    aggregation: false
+    logsource:
+      category: process_creation
+      product: windows
+    detection:
+      selection:
+        hostname: '{event_data.host.name}'
+        Image|endswith:
+          - '\eventvwr.exe'
+          - '\fodhelper.exe'
+          - '\computerdefaults.exe'
+          - '\sdclt.exe'
+      condition: selection
+    fields:
+      - User
+      - Image
+      - CommandLine
+      - ParentImage
+- question: What child processes were spawned by the auto-elevated process after UAC bypass?
+  context: Tracks the elevated payload execution and follow-on activity.
+  range: +2h
+  query: |
+    aggregation: false
+    logsource:
+      category: process_creation
+      product: windows
+    detection:
+      selection:
+        hostname: '{event_data.host.name}'
+        ParentImage|endswith:
+          - '\eventvwr.exe'
+          - '\fodhelper.exe'
+          - '\computerdefaults.exe'
+          - '\sdclt.exe'
+      condition: selection
+    fields:
+      - User
+      - Image
+      - CommandLine
+      - ParentImage
+- question: What process activity occurred on this host in the 15 minutes before the UAC bypass?
+  context: Identifies the initial access or delivery mechanism that led to Empire deployment.
+  range: -15m
+  query: |
+    aggregation: false
+    logsource:
+      category: process_creation
+      product: windows
+    detection:
+      selection:
+        hostname: '{event_data.host.name}'
+      condition: selection
+    fields:
+      - User
+      - Image
+      - CommandLine
+- question: What other PowerShell executions with hidden windows occurred on this host?
+  context: Identifies other Empire activities or related tooling using similar execution patterns.
+  range: +/-24h
+  query: |
+    aggregation: false
+    logsource:
+      category: process_creation
+      product: windows
+    detection:
+      selection:
+        hostname: '{event_data.host.name}'
+        Image|endswith:
+          - '\powershell.exe'
+          - '\pwsh.exe'
+        CommandLine|contains|all:
+          - '-w Hidden'
+          - '-NoP'
+      condition: selection
+    fields:
+      - User
+      - Image
+      - CommandLine
+- question: Has this user account executed Empire UAC bypass commands on other hosts?
+  context: Identifies lateral movement or campaign scope using the same privilege escalation technique.
+  range: -7d
+  query: |
+    aggregation: false
+    logsource:
+      category: process_creation
+      product: windows
+    detection:
+      selection:
+        User: '{event_data.user.name}'
+        CommandLine|contains:
+          - 'HKCU:Software\Microsoft\Windows Update'
+          - 'gp HKCU'
+      filter:
+        hostname: '{event_data.host.name}'
+      condition: selection and not filter
+    fields:
+      - hostname
+      - Image
+      - CommandLine
+- question: Are there other hosts showing PowerShell execution with Empire UAC bypass patterns?
+  context: Detects campaign-wide deployment of Empire framework and UAC bypass techniques.
+  range: +/-24h
+  query: |
+    aggregation: false
+    logsource:
+      category: process_creation
+      product: windows
+    detection:
+      selection:
+        CommandLine|contains:
+          - '-NoP -NonI -w Hidden -c $x=$((gp HKCU:Software\Microsoft\Windows Update).Update)'
+          - '-NoP -NonI -c $x=$((gp HKCU:Software\Microsoft\Windows Update).Update);'
+      filter:
+        hostname: '{event_data.host.name}'
+      condition: selection and not filter
+    fields:
+      - hostname
+      - User
+      - Image
+      - CommandLine
+- question: What network connections occurred after the UAC bypass execution?
+  context: Reveals Empire C2 communications or lateral movement with elevated privileges.
+  range: +30m
+  query: |
+    aggregation: false
+    logsource:
+      category: network_connection
+      product: windows
+    detection:
+      selection:
+        hostname: '{event_data.host.name}'
+      condition: selection
+    fields:
+      - User
+      - Image
+      - DestinationIp
+      - DestinationPort
+      - ProcessGuid
+- question: Were any persistence mechanisms established after the UAC bypass?
+  context: Detects persistence with elevated privileges after successful UAC bypass.
+  range: +2h
+  query: |
+    aggregation: false
+    logsource:
+      category: process_creation
+      product: windows
+    detection:
+      selection:
+        hostname: '{event_data.host.name}'
+        Image|endswith:
+          - '\schtasks.exe'
+          - '\sc.exe'
+          - '\reg.exe'
+        CommandLine|contains:
+          - 'create'
+          - '/create'
+          - 'add'
+      condition: selection
+    fields:
+      - User
+      - Image
+      - CommandLine

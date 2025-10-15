@@ -1,0 +1,346 @@
+name: Suspicious Child Process Of Veeam Database
+id: 1500069
+description: |
+  Detects suspicious child processes spawned by the SQL Server instance associated with Veeam Backup & Replication
+  (VEEAMSQL). This pattern was observed in FIN7 intrusions exploiting CVE-2023-27532, a vulnerability allowing
+  unauthenticated access to Veeam instances. The SQL server process executed shell commands to download and execute
+  PowerShell scripts, perform reconnaissance, steal credentials from the Veeam database, and facilitate lateral
+  movement. Observed activity includes execution of PowerShell with bypass flags, MSHTA, rundll32, network
+  reconnaissance tools, and file operations. This activity could indicate remote code execution through SQL injection,
+  exploitation of Veeam vulnerabilities, or legitimate administrative operations that warrant verification.
+type: detection
+detection_id: d55b793d-f847-4eea-b59a-5ab09908ac90
+detection_category: ''
+detection_type: sigma
+contributors:
+- SecurityOnionSolutions
+created: 2025-01-15
+questions:
+- question: What was the full command line of the suspicious process spawned by the Veeam SQL server?
+  context: Identifies the specific operation performed (script execution, reconnaissance, credential theft).
+  range: +/-5m
+  query: |
+    aggregation: false
+    logsource:
+      category: process_creation
+      product: windows
+    detection:
+      selection:
+        ProcessGuid: '{event_data.process.entity_id}'
+      condition: selection
+    fields:
+      - User
+      - hostname
+      - Image
+      - CommandLine
+      - ParentImage
+- question: What is the parent SQL Server process command line containing the VEEAMSQL database reference?
+  context: Confirms the Veeam SQL Server instance context and identifies the specific database instance.
+  range: +/-5m
+  query: |
+    aggregation: false
+    logsource:
+      category: process_creation
+      product: windows
+    detection:
+      selection:
+        ProcessGuid: '{event_data.process.parent.entity_id}'
+      condition: selection
+    fields:
+      - User
+      - hostname
+      - Image
+      - CommandLine
+      - ParentCommandLine
+- question: Has this pattern of sqlservr.exe spawning suspicious child processes occurred multiple times on this host?
+  context: Determines if this is part of a sustained campaign or repeated exploitation attempts.
+  range: +/-24h
+  query: |
+    aggregation: false
+    logsource:
+      category: process_creation
+      product: windows
+    detection:
+      selection:
+        hostname: '{event_data.host.name}'
+        ParentImage|endswith: '\sqlservr.exe'
+        ParentCommandLine|contains: 'VEEAMSQL'
+        Image|endswith:
+          - '\cmd.exe'
+          - '\powershell.exe'
+          - '\pwsh.exe'
+      filter:
+        ProcessGuid: '{event_data.process.entity_id}'
+      condition: selection and not filter
+    fields:
+      - User
+      - Image
+      - CommandLine
+      - ParentImage
+- question: Have other hosts with Veeam installations shown similar sqlservr.exe spawning suspicious processes?
+  context: Reveals potential campaign-wide exploitation of Veeam servers across the environment.
+  range: +/-24h
+  query: |
+    aggregation: false
+    logsource:
+      category: process_creation
+      product: windows
+    detection:
+      selection:
+        ParentImage|endswith: '\sqlservr.exe'
+        ParentCommandLine|contains: 'VEEAMSQL'
+        Image|endswith:
+          - '\cmd.exe'
+          - '\powershell.exe'
+          - '\pwsh.exe'
+      filter:
+        hostname: '{event_data.host.name}'
+      condition: selection and not filter
+    fields:
+      - hostname
+      - User
+      - Image
+      - CommandLine
+- question: Was there network activity on port 9401 (Veeam Backup Service) prior to the suspicious process execution?
+  context: Port 9401 is used for Veeam Backup Service communication and is the attack vector for CVE-2023-27532 exploitation.
+  range: -30m
+  query: |
+    aggregation: false
+    logsource:
+      category: network_connection
+      product: windows
+    detection:
+      selection:
+        hostname: '{event_data.host.name}'
+        DestinationPort: 9401
+      condition: selection
+    fields:
+      - User
+      - Image
+      - DestinationIp
+      - DestinationPort
+      - SourceIp
+- question: Were PowerShell scripts downloaded and executed from external sources?
+  context: FIN7 used in-memory download and execution of PowerShell scripts (POWERTRASH) containing embedded payloads.
+  range: +/-1h
+  query: |
+    aggregation: false
+    logsource:
+      category: process_creation
+      product: windows
+    detection:
+      selection:
+        hostname: '{event_data.host.name}'
+        Image|endswith:
+          - '\powershell.exe'
+          - '\pwsh.exe'
+        CommandLine|contains:
+          - 'DownloadString'
+          - 'DownloadFile'
+          - 'Invoke-WebRequest'
+          - 'IEX'
+          - 'iwr'
+          - 'wget'
+          - 'curl'
+      condition: selection
+    fields:
+      - User
+      - Image
+      - CommandLine
+      - ParentImage
+- question: Were reconnaissance commands executed on this host after the initial suspicious process?
+  context: FIN7 used netstat, tasklist, ipconfig, whoami, and nltest for discovery following initial access.
+  range: +2h
+  query: |
+    aggregation: false
+    logsource:
+      category: process_creation
+      product: windows
+    detection:
+      selection:
+        hostname: '{event_data.host.name}'
+        Image|endswith:
+          - '\netstat.exe'
+          - '\tasklist.exe'
+          - '\ipconfig.exe'
+          - '\whoami.exe'
+          - '\nltest.exe'
+      condition: selection
+    fields:
+      - User
+      - Image
+      - CommandLine
+      - ParentImage
+- question: Were there attempts to access or query the Veeam database for credential information?
+  context: FIN7 executed SQL commands to steal credentials from the Veeam backup database.
+  range: +/-2h
+  query: |
+    aggregation: false
+    logsource:
+      category: process_creation
+      product: windows
+    detection:
+      selection:
+        hostname: '{event_data.host.name}'
+        ParentImage|endswith: '\sqlservr.exe'
+        CommandLine|contains:
+          - 'SELECT'
+          - 'credential'
+          - 'password'
+          - 'VeeamBackup'
+      condition: selection
+    fields:
+      - User
+      - Image
+      - CommandLine
+      - ParentCommandLine
+- question: Were PowerShell scripts with naming patterns similar to FIN7 tradecraft dropped on the system?
+  context: FIN7 used specific naming conventions like icsnd16_64refl.ps1, host_ip.ps1, gup18.ps1, and 445.ps1.
+  range: +/-24h
+  query: |
+    aggregation: false
+    logsource:
+      category: file_event
+      product: windows
+    detection:
+      selection:
+        hostname: '{event_data.host.name}'
+        TargetFilename|contains:
+          - 'refl.ps1'
+          - 'host_ip.ps1'
+          - 'gup18.ps1'
+          - '445.ps1'
+          - 'analmolus'
+      condition: selection
+    fields:
+      - User
+      - Image
+      - TargetFilename
+      - ProcessGuid
+- question: Were files written to %APPDATA% directories for persistence establishment?
+  context: FIN7 deployed POWERHOLD script that drops persistence files including gup.exe, libcurl.dll, and encoded payloads to APPDATA.
+  range: +2h
+  query: |
+    aggregation: false
+    logsource:
+      category: file_event
+      product: windows
+    detection:
+      selection:
+        hostname: '{event_data.host.name}'
+        TargetFilename|contains: '\AppData\Roaming\'
+        TargetFilename|endswith:
+          - 'gup.exe'
+          - 'libcurl.dll'
+          - '.vbs'
+          - '.bat'
+      condition: selection
+    fields:
+      - User
+      - Image
+      - TargetFilename
+      - ProcessGuid
+- question: Were autorun registry keys created for persistence mechanisms?
+  context: POWERHOLD establishes persistence by creating autorun registry entries to execute payloads on system startup.
+  range: +2h
+  query: |
+    aggregation: false
+    logsource:
+      category: registry_event
+      product: windows
+    detection:
+      selection:
+        hostname: '{event_data.host.name}'
+        TargetObject|contains:
+          - '\Microsoft\Windows\CurrentVersion\Run'
+          - '\Microsoft\Windows\CurrentVersion\RunOnce'
+      condition: selection
+    fields:
+      - User
+      - Image
+      - TargetObject
+      - Details
+      - EventType
+- question: Were there lateral movement indicators such as SMB file transfers to ADMIN$ shares?
+  context: FIN7 performed lateral movement by copying PowerShell scripts to remote ADMIN$ shares via SMB.
+  range: +2h
+  query: |
+    aggregation: false
+    logsource:
+      category: file_event
+      product: windows
+    detection:
+      selection:
+        hostname: '{event_data.host.name}'
+        TargetFilename|contains: '\ADMIN$\'
+        TargetFilename|endswith:
+          - '.ps1'
+          - '.exe'
+          - '.dll'
+      condition: selection
+    fields:
+      - User
+      - Image
+      - TargetFilename
+      - ProcessGuid
+- question: Were remote services created for code execution on other hosts?
+  context: FIN7 achieved remote execution through service creation after SMB-based file transfer.
+  range: +2h
+  query: |
+    aggregation: false
+    logsource:
+      category: process_creation
+      product: windows
+    detection:
+      selection:
+        hostname: '{event_data.host.name}'
+        Image|endswith: '\sc.exe'
+        CommandLine|contains:
+          - 'create'
+          - 'start'
+      condition: selection
+    fields:
+      - User
+      - Image
+      - CommandLine
+      - ParentImage
+- question: Did network connections to external file-hosting services occur during the incident?
+  context: FIN7 hosted PowerShell scripts on external services like temp.sh for download and execution.
+  range: +/-2h
+  query: |
+    aggregation: false
+    logsource:
+      category: network
+      service: dns
+    detection:
+      selection:
+        src_ip: '{source.ip}'
+        dns.query.name|contains:
+          - 'temp.sh'
+          - 'transfer.sh'
+          - 'pastebin'
+          - 'hastebin'
+      condition: selection
+    fields:
+      - dns.query.name
+      - dns.resolved_ip
+- question: Did the same user account exhibit similar Veeam SQL exploitation patterns on other hosts?
+  context: Tracks cross-host activity to determine campaign scope and lateral movement using compromised credentials.
+  range: +/-24h
+  query: |
+    aggregation: false
+    logsource:
+      category: process_creation
+      product: windows
+    detection:
+      selection:
+        User: '{event_data.user.name}'
+        ParentImage|endswith: '\sqlservr.exe'
+        ParentCommandLine|contains: 'VEEAMSQL'
+      filter:
+        hostname: '{event_data.host.name}'
+      condition: selection and not filter
+    fields:
+      - hostname
+      - Image
+      - CommandLine

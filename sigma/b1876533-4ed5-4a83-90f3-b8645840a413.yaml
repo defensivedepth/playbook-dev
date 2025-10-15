@@ -1,0 +1,307 @@
+name: HackTool - SafetyKatz Execution
+id: 1500061
+description: |
+  Detects the execution of SafetyKatz, a C# tool that combines Mimikatz with a PE loader to dump LSASS memory without directly attaching to the process. SafetyKatz creates a minidump of LSASS using MiniDumpWriteDump API, loads a modified Mimikatz in-memory using a .NET PE loader, and automatically extracts credentials using sekurlsa::logonpasswords and sekurlsa::ekeys before deleting the minidump file. While SafetyKatz has legitimate uses for security testing and incident response in authorized environments, its execution in production environments typically indicates credential dumping attempts.
+type: detection
+detection_id: b1876533-4ed5-4a83-90f3-b8645840a413
+detection_category: ''
+detection_type: sigma
+contributors:
+- SecurityOnionSolutions
+created: 2025-10-15
+questions:
+- question: What was the full SafetyKatz command line executed on this host?
+  context: Reveals execution method and any parameters passed to SafetyKatz.
+  query: |
+    aggregation: false
+    logsource:
+      category: process_creation
+      product: windows
+    detection:
+      selection:
+        ProcessGuid: '{event_data.process.entity_id}'
+      condition: selection
+    fields:
+      - User
+      - hostname
+      - Image
+      - CommandLine
+      - ProcessId
+- question: What process created the SafetyKatz execution?
+  context: Identifies the delivery mechanism or parent process chain.
+  range: -15m
+  query: |
+    aggregation: false
+    logsource:
+      category: process_creation
+      product: windows
+    detection:
+      selection:
+        ProcessGuid: '{event_data.process.parent.entity_id}'
+      condition: selection
+    fields:
+      - User
+      - hostname
+      - Image
+      - CommandLine
+      - ProcessId
+- question: Did SafetyKatz create the debug.bin LSASS minidump file?
+  context: SafetyKatz writes LSASS minidumps to C:\Windows\Temp\debug.bin by default before credential extraction.
+  range: +/-5m
+  query: |
+    aggregation: false
+    logsource:
+      category: file_event
+      product: windows
+    detection:
+      selection:
+        ProcessGuid: '{event_data.process.entity_id}'
+        TargetFilename|contains: 'debug.bin'
+      condition: selection
+    fields:
+      - User
+      - Image
+      - TargetFilename
+      - file.path
+- question: Was the debug.bin file deleted after credential extraction?
+  context: SafetyKatz automatically deletes the minidump file after processing to evade forensic detection.
+  range: +30m
+  query: |
+    aggregation: false
+    logsource:
+      category: file_event
+      product: windows
+    detection:
+      selection:
+        ProcessGuid: '{event_data.process.entity_id}'
+        TargetFilename|contains: 'debug.bin'
+      condition: selection
+    fields:
+      - User
+      - Image
+      - TargetFilename
+      - EventType
+- question: What processes accessed LSASS memory around the time of SafetyKatz execution?
+  context: Identifies the LSASS minidump operation using MiniDumpWriteDump API.
+  range: +/-10m
+  query: |
+    aggregation: false
+    logsource:
+      category: process_creation
+      product: windows
+    detection:
+      selection:
+        hostname: '{event_data.host.name}'
+        CommandLine|contains:
+          - 'lsass'
+          - 'MiniDump'
+          - 'procdump'
+      filter:
+        ProcessGuid: '{event_data.process.entity_id}'
+      condition: selection and not filter
+    fields:
+      - User
+      - Image
+      - CommandLine
+      - ProcessId
+- question: What processes were spawned by SafetyKatz after execution?
+  context: Identifies post-exploitation activity or lateral movement attempts.
+  range: +2h
+  query: |
+    aggregation: false
+    logsource:
+      category: process_creation
+      product: windows
+    detection:
+      selection:
+        ParentProcessGuid: '{event_data.process.entity_id}'
+      condition: selection
+    fields:
+      - User
+      - hostname
+      - Image
+      - CommandLine
+      - ProcessId
+- question: Were any other credential dumping tools executed on this host within 30 minutes?
+  context: Detects concurrent use of Mimikatz, ProcDump, or other LSASS dumping tools.
+  range: +/-30m
+  query: |
+    aggregation: false
+    logsource:
+      category: process_creation
+      product: windows
+    detection:
+      selection:
+        hostname: '{event_data.host.name}'
+        Image|contains:
+          - '\mimikatz.exe'
+          - '\procdump'
+          - '\dumpert'
+          - '\nanodump'
+      filter:
+        ProcessGuid: '{event_data.process.entity_id}'
+      condition: selection and not filter
+    fields:
+      - User
+      - Image
+      - CommandLine
+      - ProcessId
+- question: What network connections were established by SafetyKatz?
+  context: Identifies communication with C2 infrastructure for credential exfiltration.
+  range: +/-15m
+  query: |
+    aggregation: false
+    logsource:
+      category: network_connection
+      product: windows
+    detection:
+      selection:
+        ProcessGuid: '{event_data.process.entity_id}'
+      condition: selection
+    fields:
+      - User
+      - Image
+      - DestinationIp
+      - DestinationPort
+      - SourceIp
+- question: Is SafetyKatz execution typical for this user account in the past 30 days?
+  context: Distinguishes authorized security testing from unauthorized credential access.
+  range: -30d
+  query: |
+    aggregation: false
+    logsource:
+      category: process_creation
+      product: windows
+    detection:
+      selection:
+        User: '{event_data.user.name}'
+        Image|contains: '\SafetyKatz.exe'
+      filter:
+        ProcessGuid: '{event_data.process.entity_id}'
+      condition: selection and not filter
+    fields:
+      - hostname
+      - Image
+      - CommandLine
+      - ProcessId
+- question: What other hosts on the network have executed SafetyKatz in the past 24 hours?
+  context: Reveals scope of credential dumping campaign across multiple systems.
+  range: -24h
+  query: |
+    aggregation: false
+    logsource:
+      category: process_creation
+      product: windows
+    detection:
+      selection:
+        Image|contains: '\SafetyKatz.exe'
+      filter:
+        hostname: '{event_data.host.name}'
+      condition: selection and not filter
+    fields:
+      - User
+      - hostname
+      - CommandLine
+      - ProcessId
+- question: Did the same user account execute SafetyKatz on other hosts in the past 7 days?
+  context: Tracks lateral movement and credential reuse patterns.
+  range: -7d
+  query: |
+    aggregation: false
+    logsource:
+      category: process_creation
+      product: windows
+    detection:
+      selection:
+        User: '{event_data.user.name}'
+        Image|contains: '\SafetyKatz.exe'
+      filter:
+        hostname: '{event_data.host.name}'
+      condition: selection and not filter
+    fields:
+      - hostname
+      - CommandLine
+      - ProcessId
+- question: Were any .NET assembly loading events detected around SafetyKatz execution?
+  context: SafetyKatz uses .NET PE loader to load Mimikatz in-memory, which may generate CLR assembly load events.
+  range: +/-15m
+  query: |
+    aggregation: false
+    logsource:
+      category: process_creation
+      product: windows
+    detection:
+      selection:
+        hostname: '{event_data.host.name}'
+        CommandLine|contains:
+          - 'System.Reflection.Assembly'
+          - 'Load'
+          - '[Reflection.Assembly]'
+      condition: selection
+    fields:
+      - User
+      - Image
+      - CommandLine
+      - ProcessId
+- question: Were any suspicious files created in the Windows Temp directory around SafetyKatz execution?
+  context: Identifies the LSASS minidump file or other staging artifacts in common temporary directories.
+  range: +/-30m
+  query: |
+    aggregation: false
+    logsource:
+      category: file_event
+      product: windows
+    detection:
+      selection:
+        hostname: '{event_data.host.name}'
+        TargetFilename|contains:
+          - '\Windows\Temp\'
+          - '\AppData\Local\Temp\'
+        TargetFilename|endswith:
+          - '.bin'
+          - '.dmp'
+          - '.tmp'
+      condition: selection
+    fields:
+      - User
+      - Image
+      - TargetFilename
+      - file.path
+- question: Did any processes load the dbghelp.dll or dbgcore.dll modules?
+  context: MiniDumpWriteDump API requires dbghelp.dll or dbgcore.dll to create LSASS memory dumps.
+  range: +/-30m
+  query: |
+    aggregation: false
+    logsource:
+      category: process_creation
+      product: windows
+    detection:
+      selection:
+        hostname: '{event_data.host.name}'
+        CommandLine|contains:
+          - 'dbghelp.dll'
+          - 'dbgcore.dll'
+      condition: selection
+    fields:
+      - User
+      - Image
+      - CommandLine
+      - ProcessId
+- question: Were any registry keys modified after SafetyKatz execution?
+  context: Detects persistence mechanisms or configuration changes after credential access.
+  range: +1h
+  query: |
+    aggregation: false
+    logsource:
+      category: registry_event
+      product: windows
+    detection:
+      selection:
+        ProcessGuid: '{event_data.process.entity_id}'
+      condition: selection
+    fields:
+      - User
+      - Image
+      - TargetObject
+      - Details
+      - EventType

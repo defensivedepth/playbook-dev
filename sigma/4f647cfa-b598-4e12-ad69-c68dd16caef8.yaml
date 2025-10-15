@@ -1,0 +1,187 @@
+name: DumpStack.log Defender Evasion
+id: 1500072
+description: |
+  Detects execution of files named DumpStack.log to evade Microsoft Defender static detection. Microsoft Defender
+  has a file exclusion for filenames matching "DumpStack.log" which was discovered as a method to bypass static
+  analysis and signature-based detection. By naming executable files or payloads with this specific filename,
+  threat actors can execute code without triggering Defender scans. The technique applies to both direct execution
+  of renamed binaries ending in DumpStack.log and download operations that save payloads with this filename. This
+  evasion technique represents a straightforward bypass of endpoint protection and is trivial to implement in attack
+  tooling. The technique was publicly disclosed in early 2022 and may have been addressed in subsequent Defender updates.
+type: detection
+detection_id: 4f647cfa-b598-4e12-ad69-c68dd16caef8
+detection_category: ''
+detection_type: sigma
+contributors:
+- SecurityOnionSolutions
+created: 2025-01-15
+questions:
+- question: What was the full command line used to execute or download the DumpStack.log file?
+  context: Identifies whether this is direct execution of a renamed binary or a download operation saving with this filename.
+  range: +/-5m
+  query: |
+    aggregation: false
+    logsource:
+      category: process_creation
+      product: windows
+    detection:
+      selection:
+        ProcessGuid: '{event_data.process.entity_id}'
+      condition: selection
+    fields:
+      - User
+      - hostname
+      - Image
+      - CommandLine
+      - ParentImage
+- question: What process spawned the execution or download of the DumpStack.log file?
+  context: Determines the parent process and delivery mechanism for the Defender evasion technique.
+  range: -15m
+  query: |
+    aggregation: false
+    logsource:
+      category: process_creation
+      product: windows
+    detection:
+      selection:
+        ProcessGuid: '{event_data.process.parent.entity_id}'
+      condition: selection
+    fields:
+      - User
+      - hostname
+      - Image
+      - CommandLine
+      - ParentImage
+- question: What tool was used to download or create the DumpStack.log file?
+  context: Identifies the download utility or process that created the file with the evasive filename.
+  range: -15m
+  query: |
+    aggregation: false
+    logsource:
+      category: process_creation
+      product: windows
+    detection:
+      selection:
+        hostname: '{event_data.host.name}'
+        CommandLine|contains:
+          - 'DumpStack.log'
+          - '-o DumpStack'
+          - '-O DumpStack'
+          - 'Out-File.*DumpStack'
+      condition: selection
+    fields:
+      - User
+      - Image
+      - CommandLine
+      - ParentImage
+- question: Have files named DumpStack.log been created on this host?
+  context: Identifies the file creation event and location where the evasive payload was staged.
+  range: +/-1h
+  query: |
+    aggregation: false
+    logsource:
+      category: file_event
+      product: windows
+    detection:
+      selection:
+        hostname: '{event_data.host.name}'
+        TargetFilename|contains: 'DumpStack.log'
+      condition: selection
+    fields:
+      - User
+      - Image
+      - TargetFilename
+      - ProcessGuid
+- question: What other processes were executed on this host in the 15 minutes before the DumpStack.log activity?
+  context: Identifies preparatory activity and delivery mechanisms preceding the evasion technique.
+  range: -15m
+  query: |
+    aggregation: false
+    logsource:
+      category: process_creation
+      product: windows
+    detection:
+      selection:
+        hostname: '{event_data.host.name}'
+      condition: selection
+    fields:
+      - User
+      - Image
+      - CommandLine
+      - ParentImage
+- question: Did the DumpStack.log file spawn any child processes after execution?
+  context: Reveals post-execution activity and the actual payload behavior after bypassing Defender.
+  range: +2h
+  query: |
+    aggregation: false
+    logsource:
+      category: process_creation
+      product: windows
+    detection:
+      selection:
+        ParentProcessGuid: '{event_data.process.entity_id}'
+      condition: selection
+    fields:
+      - User
+      - Image
+      - CommandLine
+      - ParentImage
+- question: What network connections occurred after the DumpStack.log file was executed or downloaded?
+  context: Detects C2 communications or additional payload downloads following successful Defender evasion.
+  range: +1h
+  query: |
+    aggregation: false
+    logsource:
+      category: network_connection
+      product: windows
+    detection:
+      selection:
+        hostname: '{event_data.host.name}'
+      condition: selection
+    fields:
+      - User
+      - Image
+      - DestinationIp
+      - DestinationPort
+      - ProcessGuid
+- question: Has this host shown other signs of Defender evasion or bypass techniques?
+  context: Identifies additional evasion methods that may be part of the same attack chain.
+  range: +/-24h
+  query: |
+    aggregation: false
+    logsource:
+      category: process_creation
+      product: windows
+    detection:
+      selection:
+        hostname: '{event_data.host.name}'
+        CommandLine|contains:
+          - 'Set-MpPreference'
+          - 'DisableRealtimeMonitoring'
+          - 'Add-MpPreference -ExclusionPath'
+          - 'DisableIOAVProtection'
+      condition: selection
+    fields:
+      - User
+      - Image
+      - CommandLine
+      - ParentImage
+- question: Has this Defender evasion technique been observed on other hosts in the environment?
+  context: Reveals campaign-wide use of the DumpStack.log evasion technique across multiple systems.
+  range: +/-24h
+  query: |
+    aggregation: false
+    logsource:
+      category: process_creation
+      product: windows
+    detection:
+      selection:
+        Image|contains: 'DumpStack.log'
+      filter:
+        hostname: '{event_data.host.name}'
+      condition: selection and not filter
+    fields:
+      - hostname
+      - User
+      - Image
+      - CommandLine

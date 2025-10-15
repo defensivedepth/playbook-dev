@@ -1,0 +1,168 @@
+name: Hacktool Execution - Imphash
+id: 1500056
+description: |
+  Detects the execution of various Windows hacktools via their import hash (imphash) even if the files have been renamed. Import hashes provide a way to identify executables based on the libraries and functions they import, regardless of file name changes. This detection covers a broad range of tools including credential dumpers (Pwdump, NanoDump, HandleKatz, Dumpert, PPLDump), privilege escalation tools (JuicyPotato variants, RoguePotato, UACMe Akagi, Backstab, PPLKiller), C2 frameworks (Cobalt Strike, Sliver), and EDR evasion tools (SysmonEnte, ShaprEvtMute, EDRSandBlast, EDRSilencer, EventLogCrasher).
+type: detection
+detection_id: 24e3e58a-646b-4b50-adef-02ef935b9fc8
+detection_category: ''
+detection_type: sigma
+contributors:
+- SecurityOnionSolutions
+created: 2025-10-15
+questions:
+- question: What was the full command line and file path of the detected hacktool?
+  context: Reveals the execution method and location of the renamed hacktool binary.
+  range: +/-15m
+  query: |
+    aggregation: false
+    logsource:
+      category: process_creation
+      product: windows
+    detection:
+      selection:
+        ProcessGuid: '{event_data.process.entity_id}'
+      condition: selection
+    fields:
+      - User
+      - Image
+      - CommandLine
+      - hostname
+- question: What process executed the hacktool binary?
+  context: Identifies the parent process chain and execution context.
+  range: +/-15m
+  query: |
+    aggregation: false
+    logsource:
+      category: process_creation
+      product: windows
+    detection:
+      selection:
+        ProcessGuid: '{event_data.process.parent.entity_id}'
+      condition: selection
+    fields:
+      - User
+      - Image
+      - CommandLine
+      - ParentImage
+- question: What is the import hash of the executed file?
+  context: Determines which specific hacktool was executed based on the detected imphash.
+  range: +/-15m
+  query: |
+    aggregation: false
+    logsource:
+      category: process_creation
+      product: windows
+    detection:
+      selection:
+        ProcessGuid: '{event_data.process.entity_id}'
+      condition: selection
+    fields:
+      - Image
+      - CommandLine
+      - Hashes
+- question: When was the hacktool binary created or modified on this host?
+  context: Identifies when the tool was staged and potential delivery timeframes.
+  range: -24h
+  query: |
+    aggregation: false
+    logsource:
+      category: file_event
+      product: windows
+    detection:
+      selection:
+        hostname: '{event_data.host.name}'
+      condition: selection
+    fields:
+      - User
+      - Image
+      - TargetFilename
+      - ProcessGuid
+- question: What child processes were spawned by the hacktool execution?
+  context: Tracks follow-on activity and post-exploitation commands.
+  range: +2h
+  query: |
+    aggregation: false
+    logsource:
+      category: process_creation
+      product: windows
+    detection:
+      selection:
+        ParentProcessGuid: '{event_data.process.entity_id}'
+      condition: selection
+    fields:
+      - User
+      - Image
+      - CommandLine
+      - ParentImage
+- question: What network connections occurred after the hacktool execution?
+  context: Reveals C2 communications, credential exfiltration, or lateral movement.
+  range: +30m
+  query: |
+    aggregation: false
+    logsource:
+      category: network_connection
+      product: windows
+    detection:
+      selection:
+        ProcessGuid: '{event_data.process.entity_id}'
+      condition: selection
+    fields:
+      - User
+      - Image
+      - DestinationIp
+      - DestinationPort
+- question: What process activity occurred on this host in the 15 minutes before hacktool execution?
+  context: Identifies the delivery mechanism or initial access that led to hacktool deployment.
+  range: -15m
+  query: |
+    aggregation: false
+    logsource:
+      category: process_creation
+      product: windows
+    detection:
+      selection:
+        hostname: '{event_data.host.name}'
+      condition: selection
+    fields:
+      - User
+      - Image
+      - CommandLine
+- question: Has this user account executed files with the same import hash on other hosts?
+  context: Identifies lateral movement or campaign scope using the same hacktool.
+  range: -7d
+  query: |
+    aggregation: false
+    logsource:
+      category: process_creation
+      product: windows
+    detection:
+      selection:
+        User: '{event_data.user.name}'
+      filter:
+        hostname: '{event_data.host.name}'
+      condition: selection and not filter
+    fields:
+      - hostname
+      - Image
+      - CommandLine
+      - Hashes
+- question: Are there other hosts showing execution of files with hacktools import hashes?
+  context: Detects campaign-wide deployment of offensive security tools.
+  range: +/-24h
+  query: |
+    aggregation: false
+    logsource:
+      category: process_creation
+      product: windows
+    detection:
+      selection:
+        Hashes|contains: 'IMPHASH='
+      filter:
+        hostname: '{event_data.host.name}'
+      condition: selection and not filter
+    fields:
+      - hostname
+      - User
+      - Image
+      - CommandLine
+      - Hashes

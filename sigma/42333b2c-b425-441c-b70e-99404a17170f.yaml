@@ -1,0 +1,297 @@
+name: HackTool - Sliver C2 Implant Activity Pattern
+id: 1500064
+description: |
+  Detects execution patterns characteristic of Sliver command-and-control (C2) framework implants. Sliver is an open-source C2 framework written in GoLang that supports multiple operators, various network protocols (DNS, HTTP/TLS, MTLS, TCP), and cross-platform implants. When creating an interactive shell, Sliver uses a distinctive PowerShell command line with specific encoding parameters. Sliver has been adopted by nation-state threat actors, ransomware-as-a-service affiliates including DEV-0237, and cybercrime groups using Bumblebee malware as an initial access loader. While Sliver is advertised to security professionals for legitimate testing, its execution in production environments typically indicates active C2 operations during post-exploitation phases of intrusions.
+type: detection
+detection_id: 42333b2c-b425-441c-b70e-99404a17170f
+detection_category: ''
+detection_type: sigma
+contributors:
+- SecurityOnionSolutions
+created: 2025-10-15
+questions:
+- question: What was the full PowerShell command line that triggered this detection?
+  context: Reveals the specific Sliver shell command parameters and encoding configuration.
+  query: |
+    aggregation: false
+    logsource:
+      category: process_creation
+      product: windows
+    detection:
+      selection:
+        ProcessGuid: '{event_data.process.entity_id}'
+      condition: selection
+    fields:
+      - User
+      - hostname
+      - Image
+      - CommandLine
+      - ProcessId
+- question: What process created the Sliver interactive shell?
+  context: Identifies the Sliver implant process that spawned the interactive shell.
+  range: -15m
+  query: |
+    aggregation: false
+    logsource:
+      category: process_creation
+      product: windows
+    detection:
+      selection:
+        ProcessGuid: '{event_data.process.parent.entity_id}'
+      condition: selection
+    fields:
+      - User
+      - hostname
+      - Image
+      - CommandLine
+      - ProcessId
+- question: What commands were executed through the Sliver interactive shell?
+  context: Reveals post-exploitation commands and reconnaissance activity performed by the operator.
+  range: +4h
+  query: |
+    aggregation: false
+    logsource:
+      category: process_creation
+      product: windows
+    detection:
+      selection:
+        ParentProcessGuid: '{event_data.process.entity_id}'
+      condition: selection
+    fields:
+      - User
+      - hostname
+      - Image
+      - CommandLine
+      - ProcessId
+- question: What network connections were established by the parent Sliver implant process?
+  context: Identifies C2 server communication and beaconing activity.
+  range: +/-30m
+  query: |
+    aggregation: false
+    logsource:
+      category: network_connection
+      product: windows
+    detection:
+      selection:
+        ProcessGuid: '{event_data.process.parent.entity_id}'
+      condition: selection
+    fields:
+      - User
+      - Image
+      - DestinationIp
+      - DestinationPort
+      - SourceIp
+- question: Did the Sliver implant perform process injection into notepad.exe?
+  context: Sliver's Sideload, SpawnDll, and Execute-Assembly commands spawn and inject into notepad.exe by default.
+  range: +/-30m
+  query: |
+    aggregation: false
+    logsource:
+      category: process_creation
+      product: windows
+    detection:
+      selection:
+        hostname: '{event_data.host.name}'
+        Image|endswith: '\notepad.exe'
+        CommandLine: 'notepad.exe'
+      condition: selection
+    fields:
+      - User
+      - Image
+      - CommandLine
+      - ProcessId
+- question: Did the Sliver implant inject into spoolsv.exe for privilege escalation?
+  context: Sliver's GetSystem command targets spoolsv.exe by default for privilege escalation via process injection.
+  range: +/-30m
+  query: |
+    aggregation: false
+    logsource:
+      category: process_creation
+      product: windows
+    detection:
+      selection:
+        hostname: '{event_data.host.name}'
+        CommandLine|endswith: '\spoolsv.exe'
+      condition: selection
+    fields:
+      - User
+      - Image
+      - CommandLine
+      - ProcessId
+- question: Were any services installed with the default Sliver PsExec service name or description?
+  context: Sliver's PsExec command creates services with DisplayName "Sliver" and Description "Sliver implant" by default.
+  range: +/-30m
+  query: |
+    aggregation: false
+    logsource:
+      category: registry_event
+      product: windows
+    detection:
+      selection:
+        hostname: '{event_data.host.name}'
+        TargetObject|contains: '\Services\'
+      selection_values:
+        - RegistryValueName: 'DisplayName'
+          RegistryValueData: 'Sliver'
+        - RegistryValueName: 'Description'
+          RegistryValueData: 'Sliver implant'
+      condition: selection and selection_values
+    fields:
+      - RegistryKey
+      - RegistryValueName
+      - RegistryValueData
+- question: Were any temporary executables created in Windows Temp directory matching Sliver's naming pattern?
+  context: Sliver's PsExec command drops executables with random 10-character alphanumeric names in C:\Windows\Temp.
+  range: +/-30m
+  query: |
+    aggregation: false
+    logsource:
+      category: file_event
+      product: windows
+    detection:
+      selection:
+        hostname: '{event_data.host.name}'
+        TargetFilename|contains: ':\windows\temp\'
+        TargetFilename|endswith: '.exe'
+      condition: selection
+    fields:
+      - User
+      - Image
+      - TargetFilename
+      - file.path
+- question: What other processes executed on this host within 15 minutes of the Sliver shell?
+  context: Identifies concurrent post-exploitation activity and lateral movement attempts.
+  range: +/-15m
+  query: |
+    aggregation: false
+    logsource:
+      category: process_creation
+      product: windows
+    detection:
+      selection:
+        hostname: '{event_data.host.name}'
+      filter:
+        ProcessGuid: '{event_data.process.entity_id}'
+      condition: selection and not filter
+    fields:
+      - User
+      - Image
+      - CommandLine
+      - ProcessId
+- question: Is PowerShell execution with this specific encoding pattern typical for this user in the past 30 days?
+  context: Distinguishes authorized security testing from unauthorized C2 operations.
+  range: -30d
+  query: |
+    aggregation: false
+    logsource:
+      category: process_creation
+      product: windows
+    detection:
+      selection:
+        User: '{event_data.user.name}'
+        CommandLine|contains: '[Console]::OutputEncoding=[Text.UTF8Encoding]::UTF8'
+      filter:
+        ProcessGuid: '{event_data.process.entity_id}'
+      condition: selection and not filter
+    fields:
+      - hostname
+      - CommandLine
+      - ProcessId
+- question: What other hosts on the network have exhibited Sliver interactive shell patterns in the past 24 hours?
+  context: Reveals scope of Sliver C2 deployment across multiple compromised systems.
+  range: -24h
+  query: |
+    aggregation: false
+    logsource:
+      category: process_creation
+      product: windows
+    detection:
+      selection:
+        CommandLine|contains: '[Console]::OutputEncoding=[Text.UTF8Encoding]::UTF8'
+      filter:
+        hostname: '{event_data.host.name}'
+      condition: selection and not filter
+    fields:
+      - User
+      - hostname
+      - Image
+      - ProcessId
+- question: Did the same user account trigger Sliver shell patterns on other hosts in the past 7 days?
+  context: Tracks lateral movement and credential reuse patterns in Sliver C2 operations.
+  range: -7d
+  query: |
+    aggregation: false
+    logsource:
+      category: process_creation
+      product: windows
+    detection:
+      selection:
+        User: '{event_data.user.name}'
+        CommandLine|contains: '[Console]::OutputEncoding=[Text.UTF8Encoding]::UTF8'
+      filter:
+        hostname: '{event_data.host.name}'
+      condition: selection and not filter
+    fields:
+      - hostname
+      - Image
+      - ProcessId
+- question: Were any GoLang-compiled executables executed on this host around the time of the Sliver shell?
+  context: Sliver implants are written in GoLang and may be identifiable by GoLang compilation artifacts.
+  range: +/-2h
+  query: |
+    aggregation: false
+    logsource:
+      category: process_creation
+      product: windows
+    detection:
+      selection:
+        hostname: '{event_data.host.name}'
+        Image|contains:
+          - 'go build'
+          - '.go'
+      condition: selection
+    fields:
+      - User
+      - Image
+      - CommandLine
+      - ProcessId
+- question: Were any files with Sliver-related names created on this host?
+  context: Identifies Sliver implant binaries, configuration files, or staging artifacts.
+  range: +/-2h
+  query: |
+    aggregation: false
+    logsource:
+      category: file_event
+      product: windows
+    detection:
+      selection:
+        hostname: '{event_data.host.name}'
+        TargetFilename|contains:
+          - 'sliver'
+          - 'splinter'
+      condition: selection
+    fields:
+      - User
+      - Image
+      - TargetFilename
+      - file.path
+- question: Did any processes exhibit Bumblebee loader behavior before the Sliver shell execution?
+  context: Cybercrime actors use Bumblebee malware as an initial access loader to deliver Sliver C2 implants.
+  range: -2h
+  query: |
+    aggregation: false
+    logsource:
+      category: process_creation
+      product: windows
+    detection:
+      selection:
+        hostname: '{event_data.host.name}'
+        CommandLine|contains:
+          - 'rundll32'
+          - 'regsvr32'
+      condition: selection
+    fields:
+      - User
+      - Image
+      - CommandLine
+      - ProcessId

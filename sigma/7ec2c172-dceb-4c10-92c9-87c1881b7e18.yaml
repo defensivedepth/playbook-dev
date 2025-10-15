@@ -1,0 +1,302 @@
+name: HackTool - Rubeus Execution
+id: 1500060
+description: |
+  Detects the execution of Rubeus, a C# tool for manipulating Kerberos tickets and performing various Kerberos-based attacks including ticket extraction, pass-the-ticket, Kerberoasting, AS-REP roasting, and constrained delegation abuse. While Rubeus has legitimate uses for security testing and penetration testing in authorized environments, its execution in production environments typically indicates credential access attempts or lateral movement activity.
+type: detection
+detection_id: 7ec2c172-dceb-4c10-92c9-87c1881b7e18
+detection_category: ''
+detection_type: sigma
+contributors:
+- SecurityOnionSolutions
+created: 2025-10-15
+questions:
+- question: What was the full Rubeus command line executed on this host?
+  context: Reveals the specific Rubeus function used and target parameters.
+  query: |
+    aggregation: false
+    logsource:
+      category: process_creation
+      product: windows
+    detection:
+      selection:
+        ProcessGuid: '{event_data.process.entity_id}'
+      condition: selection
+    fields:
+      - User
+      - hostname
+      - Image
+      - CommandLine
+      - ProcessId
+- question: What process created the Rubeus execution?
+  context: Identifies the delivery mechanism or parent process chain.
+  range: -15m
+  query: |
+    aggregation: false
+    logsource:
+      category: process_creation
+      product: windows
+    detection:
+      selection:
+        ProcessGuid: '{event_data.process.parent.entity_id}'
+      condition: selection
+    fields:
+      - User
+      - hostname
+      - Image
+      - CommandLine
+      - ProcessId
+- question: What processes were spawned by Rubeus after execution?
+  context: Identifies post-exploitation activity such as cmd.exe for impersonation or lateral movement tools.
+  range: +2h
+  query: |
+    aggregation: false
+    logsource:
+      category: process_creation
+      product: windows
+    detection:
+      selection:
+        ParentProcessGuid: '{event_data.process.entity_id}'
+      condition: selection
+    fields:
+      - User
+      - hostname
+      - Image
+      - CommandLine
+      - ProcessId
+- question: Were any other Kerberos manipulation tools executed on this host within 30 minutes?
+  context: Detects concurrent use of Mimikatz, Kekeo, or other credential access tools.
+  range: +/-30m
+  query: |
+    aggregation: false
+    logsource:
+      category: process_creation
+      product: windows
+    detection:
+      selection:
+        hostname: '{event_data.host.name}'
+        Image|contains:
+          - '\mimikatz.exe'
+          - '\kekeo.exe'
+          - '\PowerShell.exe'
+          - '\pwsh.exe'
+        CommandLine|contains:
+          - 'sekurlsa::'
+          - 'kerberos::'
+          - 'Invoke-Mimikatz'
+          - 'Invoke-Kerberoast'
+      filter:
+        ProcessGuid: '{event_data.process.entity_id}'
+      condition: selection and not filter
+    fields:
+      - User
+      - Image
+      - CommandLine
+      - ProcessId
+- question: Did Rubeus create any output files containing ticket blobs?
+  context: Rubeus often writes .kirbi ticket files or base64-encoded tickets to disk for later use.
+  range: +30m
+  query: |
+    aggregation: false
+    logsource:
+      category: file_event
+      product: windows
+    detection:
+      selection:
+        ProcessGuid: '{event_data.process.entity_id}'
+        TargetFilename|contains:
+          - '.kirbi'
+          - 'ticket'
+          - 'tgt'
+          - 'tgs'
+      condition: selection
+    fields:
+      - User
+      - Image
+      - TargetFilename
+      - file.path
+- question: What network connections were established by Rubeus?
+  context: Identifies communication with domain controllers for ticket requests or authentication.
+  range: +/-15m
+  query: |
+    aggregation: false
+    logsource:
+      category: network_connection
+      product: windows
+    detection:
+      selection:
+        ProcessGuid: '{event_data.process.entity_id}'
+      condition: selection
+    fields:
+      - User
+      - Image
+      - DestinationIp
+      - DestinationPort
+      - SourceIp
+- question: Did Rubeus target specific user accounts for Kerberoasting or AS-REP roasting?
+  context: Command line analysis reveals targeted user accounts for credential extraction.
+  query: |
+    aggregation: false
+    logsource:
+      category: process_creation
+      product: windows
+    detection:
+      selection:
+        ProcessGuid: '{event_data.process.entity_id}'
+        CommandLine|contains:
+          - '/user:'
+          - '/spn:'
+          - '/ou:'
+      condition: selection
+    fields:
+      - CommandLine
+- question: Did Rubeus perform ticket injection with the ptt or createnetonly functions?
+  context: Pass-the-ticket operations indicate active credential abuse for impersonation or lateral movement.
+  query: |
+    aggregation: false
+    logsource:
+      category: process_creation
+      product: windows
+    detection:
+      selection:
+        ProcessGuid: '{event_data.process.entity_id}'
+        CommandLine|contains:
+          - 'ptt /ticket:'
+          - 'createnetonly /program:'
+          - '/luid:'
+      condition: selection
+    fields:
+      - CommandLine
+- question: Is Rubeus execution typical for this user account in the past 30 days?
+  context: Distinguishes authorized security testing from unauthorized credential access.
+  range: -30d
+  query: |
+    aggregation: false
+    logsource:
+      category: process_creation
+      product: windows
+    detection:
+      selection:
+        User: '{event_data.user.name}'
+        Image|contains: '\Rubeus.exe'
+      filter:
+        ProcessGuid: '{event_data.process.entity_id}'
+      condition: selection and not filter
+    fields:
+      - hostname
+      - Image
+      - CommandLine
+      - ProcessId
+- question: What other hosts on the network have executed Rubeus in the past 24 hours?
+  context: Reveals scope of credential access campaign across multiple systems.
+  range: -24h
+  query: |
+    aggregation: false
+    logsource:
+      category: process_creation
+      product: windows
+    detection:
+      selection:
+        Image|contains: '\Rubeus.exe'
+      filter:
+        hostname: '{event_data.host.name}'
+      condition: selection and not filter
+    fields:
+      - User
+      - hostname
+      - CommandLine
+      - ProcessId
+- question: Did the same user account execute Rubeus on other hosts in the past 7 days?
+  context: Tracks lateral movement and credential reuse patterns.
+  range: -7d
+  query: |
+    aggregation: false
+    logsource:
+      category: process_creation
+      product: windows
+    detection:
+      selection:
+        User: '{event_data.user.name}'
+        Image|contains: '\Rubeus.exe'
+      filter:
+        hostname: '{event_data.host.name}'
+      condition: selection and not filter
+    fields:
+      - hostname
+      - CommandLine
+      - ProcessId
+- question: Were any Kerberos service tickets requested for specific SPNs around the time of Rubeus execution?
+  context: Correlates Rubeus Kerberoasting activity with Event ID 4769 service ticket requests.
+  range: +/-30m
+  query: |
+    aggregation: false
+    logsource:
+      category: network
+      service: dns
+    detection:
+      selection:
+        src_ip: '{source.ip}'
+        dns.query.name|contains:
+          - '_kerberos.'
+          - '_ldap.'
+      condition: selection
+    fields:
+      - dns.query.name
+      - dns.resolved_ip
+- question: Did Rubeus perform constrained delegation abuse with the s4u function?
+  context: S4U2Self and S4U2Proxy abuse allows impersonation of privileged accounts for lateral movement.
+  query: |
+    aggregation: false
+    logsource:
+      category: process_creation
+      product: windows
+    detection:
+      selection:
+        ProcessGuid: '{event_data.process.entity_id}'
+        CommandLine|contains:
+          - 's4u /ticket:'
+          - 's4u /user:'
+          - '/impersonateuser:'
+          - '/msdsspn:'
+          - '/altservice:'
+      condition: selection
+    fields:
+      - CommandLine
+- question: Were any registry keys accessed or modified after Rubeus execution?
+  context: Some Rubeus operations interact with registry for credential storage or system configuration.
+  range: +1h
+  query: |
+    aggregation: false
+    logsource:
+      category: registry_event
+      product: windows
+    detection:
+      selection:
+        ProcessGuid: '{event_data.process.entity_id}'
+      condition: selection
+    fields:
+      - User
+      - Image
+      - TargetObject
+      - Details
+      - EventType
+- question: Did any processes load suspicious DLLs related to Kerberos manipulation after Rubeus execution?
+  context: Detects in-memory credential access techniques using kerberos.dll or similar modules.
+  range: +1h
+  query: |
+    aggregation: false
+    logsource:
+      category: process_creation
+      product: windows
+    detection:
+      selection:
+        hostname: '{event_data.host.name}'
+        CommandLine|contains:
+          - 'kerberos.dll'
+          - 'samlib.dll'
+          - 'cryptdll.dll'
+      condition: selection
+    fields:
+      - User
+      - Image
+      - CommandLine
+      - ProcessId

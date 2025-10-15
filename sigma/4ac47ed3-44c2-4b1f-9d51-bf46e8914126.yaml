@@ -1,0 +1,292 @@
+name: TrustedPath UAC Bypass Pattern
+id: 1500073
+description: |
+  Detects UAC bypass achieved by creating directories with trailing spaces that mock trusted Windows directories.
+  The technique exploits GetLongPathNameW API behavior which removes trailing spaces during path canonicalization,
+  allowing execution from "C:\Windows \System32\" (with space) to pass trusted directory checks that expect
+  "C:\Windows\System32\". Auto-elevating signed Windows executables (like winSAT.exe, mmc.exe) are copied to the
+  mock directory and executed with DLL hijacking to achieve elevation without UAC prompts. The bypass leverages
+  that CreateDirectory with "\\?\" prefix can create directories with trailing spaces that coexist alongside
+  legitimate Windows directories. The technique combines directory mocking, DLL hijacking, and trusted executable
+  auto-elevation to achieve privilege escalation while evading UAC controls.
+type: detection
+detection_id: 4ac47ed3-44c2-4b1f-9d51-bf46e8914126
+detection_category: ''
+detection_type: sigma
+contributors:
+- SecurityOnionSolutions
+created: 2025-01-15
+questions:
+- question: What executable was launched from the mock trusted directory path with trailing space?
+  context: Identifies the specific Windows signed executable being abused for UAC bypass.
+  range: +/-5m
+  query: |
+    aggregation: false
+    logsource:
+      category: process_creation
+      product: windows
+    detection:
+      selection:
+        ProcessGuid: '{event_data.process.entity_id}'
+      condition: selection
+    fields:
+      - User
+      - hostname
+      - Image
+      - CommandLine
+      - IntegrityLevel
+- question: What process spawned the execution from the mock directory?
+  context: Determines the parent process that initiated the UAC bypass attempt.
+  range: -15m
+  query: |
+    aggregation: false
+    logsource:
+      category: process_creation
+      product: windows
+    detection:
+      selection:
+        ProcessGuid: '{event_data.process.parent.entity_id}'
+      condition: selection
+    fields:
+      - User
+      - hostname
+      - Image
+      - CommandLine
+      - ParentImage
+- question: Were directories with suspicious names containing spaces created on this host?
+  context: Identifies creation of the mock trusted directories used in the UAC bypass technique.
+  range: -1h
+  query: |
+    aggregation: false
+    logsource:
+      category: file_event
+      product: windows
+    detection:
+      selection:
+        hostname: '{event_data.host.name}'
+        TargetFilename|contains:
+          - 'C:\Windows \'
+          - 'C:\Windows  \'
+          - '\System32 \'
+      condition: selection
+    fields:
+      - User
+      - Image
+      - TargetFilename
+      - ProcessGuid
+- question: Were signed Windows executables copied to the mock directory locations?
+  context: Detects copying of auto-elevating executables like winSAT.exe, mmc.exe to the mock directories.
+  range: -1h
+  query: |
+    aggregation: false
+    logsource:
+      category: file_event
+      product: windows
+    detection:
+      selection:
+        hostname: '{event_data.host.name}'
+        TargetFilename|contains:
+          - 'C:\Windows \'
+          - 'C:\Windows  \'
+        TargetFilename|endswith:
+          - '\winSAT.exe'
+          - '\mmc.exe'
+          - '\pkgmgr.exe'
+          - '\spinstall.exe'
+          - '\oobe.exe'
+      condition: selection
+    fields:
+      - User
+      - Image
+      - TargetFilename
+      - ProcessGuid
+- question: Were DLL files written to the mock directories for hijacking purposes?
+  context: Identifies DLL hijacking payloads placed in mock directories to achieve code execution during auto-elevation.
+  range: -1h
+  query: |
+    aggregation: false
+    logsource:
+      category: file_event
+      product: windows
+    detection:
+      selection:
+        hostname: '{event_data.host.name}'
+        TargetFilename|contains:
+          - 'C:\Windows \'
+          - 'C:\Windows  \'
+        TargetFilename|endswith: '.dll'
+      condition: selection
+    fields:
+      - User
+      - Image
+      - TargetFilename
+      - ProcessGuid
+- question: What child processes were spawned from the elevated mock directory execution?
+  context: Reveals the actual payload code executed with elevated privileges after successful UAC bypass.
+  range: +2h
+  query: |
+    aggregation: false
+    logsource:
+      category: process_creation
+      product: windows
+    detection:
+      selection:
+        ParentProcessGuid: '{event_data.process.entity_id}'
+      condition: selection
+    fields:
+      - User
+      - Image
+      - CommandLine
+      - ParentImage
+      - IntegrityLevel
+- question: Were other UAC bypass techniques or privilege escalation attempts observed on this host?
+  context: Identifies additional elevation methods that may be part of the same attack chain.
+  range: +/-24h
+  query: |
+    aggregation: false
+    logsource:
+      category: process_creation
+      product: windows
+    detection:
+      selection:
+        hostname: '{event_data.host.name}'
+        CommandLine|contains:
+          - 'eventvwr.exe'
+          - 'fodhelper.exe'
+          - 'sdclt.exe'
+          - 'ms-settings'
+          - 'ComputerDefaults.exe'
+      condition: selection
+    fields:
+      - User
+      - Image
+      - CommandLine
+      - ParentImage
+- question: What network connections occurred after the UAC bypass execution?
+  context: Detects C2 communications or lateral movement initiated from the elevated context.
+  range: +1h
+  query: |
+    aggregation: false
+    logsource:
+      category: network_connection
+      product: windows
+    detection:
+      selection:
+        hostname: '{event_data.host.name}'
+      condition: selection
+    fields:
+      - User
+      - Image
+      - DestinationIp
+      - DestinationPort
+      - ProcessGuid
+- question: Have other hosts in the environment exhibited this TrustedPath UAC bypass pattern?
+  context: Reveals campaign-wide privilege escalation efforts using the mock directory technique.
+  range: +/-24h
+  query: |
+    aggregation: false
+    logsource:
+      category: process_creation
+      product: windows
+    detection:
+      selection:
+        Image|contains:
+          - 'C:\Windows \'
+          - 'C:\Windows  \'
+      filter:
+        hostname: '{event_data.host.name}'
+      condition: selection and not filter
+    fields:
+      - hostname
+      - User
+      - Image
+      - CommandLine
+- question: Did the same user account execute processes from mock directories on other hosts?
+  context: Tracks cross-host privilege escalation activity by the same compromised account.
+  range: +/-24h
+  query: |
+    aggregation: false
+    logsource:
+      category: process_creation
+      product: windows
+    detection:
+      selection:
+        User: '{event_data.user.name}'
+        Image|contains:
+          - 'C:\Windows \'
+          - 'C:\Windows  \'
+      filter:
+        hostname: '{event_data.host.name}'
+      condition: selection and not filter
+    fields:
+      - hostname
+      - Image
+      - CommandLine
+- question: Were PowerShell or command-line tools used to create the mock directories?
+  context: Identifies the tooling and commands used to establish the UAC bypass infrastructure.
+  range: -1h
+  query: |
+    aggregation: false
+    logsource:
+      category: process_creation
+      product: windows
+    detection:
+      selection:
+        hostname: '{event_data.host.name}'
+        CommandLine|contains:
+          - 'mkdir'
+          - 'md '
+          - 'CreateDirectory'
+          - 'New-Item'
+          - '\\?\C:'
+      condition: selection
+    fields:
+      - User
+      - Image
+      - CommandLine
+      - ParentImage
+- question: Were registry modifications made to establish persistence after successful UAC bypass?
+  context: Detects persistence mechanisms established using elevated privileges obtained through the bypass.
+  range: +2h
+  query: |
+    aggregation: false
+    logsource:
+      category: registry_event
+      product: windows
+    detection:
+      selection:
+        hostname: '{event_data.host.name}'
+        TargetObject|contains:
+          - '\Microsoft\Windows\CurrentVersion\Run'
+          - '\Microsoft\Windows\CurrentVersion\RunOnce'
+          - '\Microsoft\Windows NT\CurrentVersion\Winlogon'
+      condition: selection
+    fields:
+      - User
+      - Image
+      - TargetObject
+      - Details
+      - EventType
+- question: Were security tools or Defender configurations modified after the UAC bypass?
+  context: Identifies attempts to disable security controls using elevated privileges.
+  range: +2h
+  query: |
+    aggregation: false
+    logsource:
+      category: process_creation
+      product: windows
+    detection:
+      selection:
+        hostname: '{event_data.host.name}'
+        CommandLine|contains:
+          - 'Set-MpPreference'
+          - 'DisableRealtimeMonitoring'
+          - 'Add-MpPreference -ExclusionPath'
+          - 'sc stop'
+          - 'sc delete'
+      condition: selection
+    fields:
+      - User
+      - Image
+      - CommandLine
+      - ParentImage

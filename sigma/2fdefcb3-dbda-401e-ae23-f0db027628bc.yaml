@@ -1,0 +1,222 @@
+name: Sticky Key Like Backdoor Execution
+id: 1500050
+description: |
+  Detects the usage and installation of a backdoor that uses an option to register a malicious debugger for built-in accessibility tools (sethc.exe, utilman.exe, osk.exe, Magnify.exe, Narrator.exe, DisplaySwitch.exe) that are accessible from the login screen. This technique involves spawning processes like cmd.exe, powershell.exe, or other interpreters from winlogon.exe with command lines referencing accessibility suite executables. The backdoor can be established through binary replacement or registry debugger configuration, both providing pre-authentication system-level access.
+type: detection
+detection_id: 2fdefcb3-dbda-401e-ae23-f0db027628bc
+detection_category: ''
+detection_type: sigma
+contributors:
+- SecurityOnionSolutions
+created: 2025-10-15
+questions:
+- question: What was the full command executed by winlogon.exe that referenced the accessibility tool?
+  context: Reveals the exact technique and payload used in the backdoor execution.
+  range: +/-15m
+  query: |
+    aggregation: false
+    logsource:
+      category: process_creation
+      product: windows
+    detection:
+      selection:
+        ProcessGuid: '{event_data.process.entity_id}'
+      condition: selection
+    fields:
+      - User
+      - Image
+      - CommandLine
+      - hostname
+- question: What process spawned from winlogon.exe to execute the backdoor?
+  context: Identifies the parent process chain and execution context.
+  range: +/-15m
+  query: |
+    aggregation: false
+    logsource:
+      category: process_creation
+      product: windows
+    detection:
+      selection:
+        ProcessGuid: '{event_data.process.parent.entity_id}'
+      condition: selection
+    fields:
+      - User
+      - Image
+      - CommandLine
+      - ParentImage
+- question: What accessibility tool binary was referenced in the command line?
+  context: Determines which specific accessibility tool was targeted for backdoor installation.
+  range: +/-15m
+  query: |
+    aggregation: false
+    logsource:
+      category: process_creation
+      product: windows
+    detection:
+      selection:
+        ProcessGuid: '{event_data.process.entity_id}'
+        CommandLine|contains:
+          - 'sethc.exe'
+          - 'utilman.exe'
+          - 'osk.exe'
+          - 'Magnify.exe'
+          - 'Narrator.exe'
+          - 'DisplaySwitch.exe'
+      condition: selection
+    fields:
+      - CommandLine
+- question: Are there registry entries setting debuggers for accessibility suite executables?
+  context: Detects the registry-based backdoor variant where cmd.exe or other interpreters are set as debuggers for accessibility tools.
+  range: -30m
+  query: |
+    aggregation: false
+    logsource:
+      category: registry_event
+      product: windows
+    detection:
+      selection:
+        TargetObject|contains:
+          - '\Image File Execution Options\sethc.exe'
+          - '\Image File Execution Options\utilman.exe'
+          - '\Image File Execution Options\osk.exe'
+          - '\Image File Execution Options\Magnify.exe'
+          - '\Image File Execution Options\Narrator.exe'
+          - '\Image File Execution Options\DisplaySwitch.exe'
+        TargetObject|endswith: '\Debugger'
+      condition: selection
+    fields:
+      - User
+      - Image
+      - TargetObject
+      - Details
+      - EventType
+- question: Have the accessibility tool binaries been replaced with cmd.exe or other executables?
+  context: Detects the file replacement backdoor variant by identifying hash mismatches or suspicious file modifications.
+  range: -24h
+  query: |
+    aggregation: false
+    logsource:
+      category: file_event
+      product: windows
+    detection:
+      selection:
+        TargetFilename|endswith:
+          - '\sethc.exe'
+          - '\utilman.exe'
+          - '\osk.exe'
+          - '\Magnify.exe'
+          - '\Narrator.exe'
+          - '\DisplaySwitch.exe'
+        TargetFilename|contains: '\System32\'
+      condition: selection
+    fields:
+      - User
+      - Image
+      - TargetFilename
+      - ProcessGuid
+- question: What child processes were spawned by the backdoor execution?
+  context: Tracks post-exploitation activity and follow-on commands executed through the backdoor.
+  range: +2h
+  query: |
+    aggregation: false
+    logsource:
+      category: process_creation
+      product: windows
+    detection:
+      selection:
+        ParentProcessGuid: '{event_data.process.entity_id}'
+      condition: selection
+    fields:
+      - User
+      - Image
+      - CommandLine
+      - ParentImage
+- question: What other processes executed from winlogon.exe on this host in the past 24 hours?
+  context: Establishes baseline activity and identifies other potentially related backdoor executions.
+  range: -24h
+  query: |
+    aggregation: false
+    logsource:
+      category: process_creation
+      product: windows
+    detection:
+      selection:
+        hostname: '{event_data.host.name}'
+        ParentImage|endswith: '\winlogon.exe'
+      condition: selection
+    fields:
+      - User
+      - Image
+      - CommandLine
+- question: Has this user account spawned accessibility-related commands on other hosts?
+  context: Identifies lateral movement or campaign scope using the same backdoor technique.
+  range: -7d
+  query: |
+    aggregation: false
+    logsource:
+      category: process_creation
+      product: windows
+    detection:
+      selection:
+        User: '{event_data.user.name}'
+        CommandLine|contains:
+          - 'sethc.exe'
+          - 'utilman.exe'
+          - 'osk.exe'
+          - 'Magnify.exe'
+          - 'Narrator.exe'
+          - 'DisplaySwitch.exe'
+      filter:
+        hostname: '{event_data.host.name}'
+      condition: selection and not filter
+    fields:
+      - hostname
+      - Image
+      - CommandLine
+- question: What network connections occurred within 30 minutes after the backdoor execution?
+  context: Reveals potential C2 communications or lateral movement initiated through the backdoor.
+  range: +30m
+  query: |
+    aggregation: false
+    logsource:
+      category: network_connection
+      product: windows
+    detection:
+      selection:
+        ProcessGuid: '{event_data.process.entity_id}'
+      condition: selection
+    fields:
+      - User
+      - Image
+      - DestinationIp
+      - DestinationPort
+- question: Are there other hosts showing winlogon.exe spawning interpreters with accessibility tool references?
+  context: Detects campaign-wide deployment of the sticky key backdoor technique.
+  range: +/-24h
+  query: |
+    aggregation: false
+    logsource:
+      category: process_creation
+      product: windows
+    detection:
+      selection:
+        ParentImage|endswith: '\winlogon.exe'
+        Image|endswith:
+          - '\cmd.exe'
+          - '\powershell.exe'
+          - '\pwsh.exe'
+          - '\cscript.exe'
+          - '\wscript.exe'
+          - '\mshta.exe'
+        CommandLine|contains:
+          - 'sethc.exe'
+          - 'utilman.exe'
+          - 'osk.exe'
+      filter:
+        hostname: '{event_data.host.name}'
+      condition: selection and not filter
+    fields:
+      - hostname
+      - User
+      - Image
+      - CommandLine

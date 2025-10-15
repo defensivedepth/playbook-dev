@@ -1,0 +1,242 @@
+name: Potential SMB Relay Attack Tool Execution
+id: 1500059
+description: |
+  Detects the execution of various tools used for NTLM relay and SMB relay attacks on Windows for privilege escalation. This includes the Potato family of exploits (RottenPotato, HotPotato, JuicyPotato, JuicyPotatoNG, LocalPotato) that abuse COM object instantiation and NTLM relay to escalate from service account privileges to SYSTEM. These tools trick the SYSTEM account into authenticating via NTLM to a local endpoint, relay that authentication to negotiate a SYSTEM security token, and then impersonate that token. Also detects network-based relay tools like Responder, smbrelayx, and ntlmrelayx used for credential capture and relay across the network, as well as PetitPotam and SpoolSample tools used to coerce authentication for relay attacks.
+type: detection
+detection_id: 5589ab4f-a767-433c-961d-c91f3f704db1
+detection_category: ''
+detection_type: sigma
+contributors:
+- SecurityOnionSolutions
+created: 2025-10-15
+questions:
+- question: What was the full command line of the relay attack tool execution?
+  context: Reveals the specific parameters and target configuration for the relay attack.
+  range: +/-15m
+  query: |
+    aggregation: false
+    logsource:
+      category: process_creation
+      product: windows
+    detection:
+      selection:
+        ProcessGuid: '{event_data.process.entity_id}'
+      condition: selection
+    fields:
+      - User
+      - Image
+      - CommandLine
+      - hostname
+- question: What process executed the relay attack tool?
+  context: Identifies the parent process chain and execution context.
+  range: +/-15m
+  query: |
+    aggregation: false
+    logsource:
+      category: process_creation
+      product: windows
+    detection:
+      selection:
+        ProcessGuid: '{event_data.process.parent.entity_id}'
+      condition: selection
+    fields:
+      - User
+      - Image
+      - CommandLine
+      - ParentImage
+- question: What specific relay tool variant was used?
+  context: Determines which Potato variant or relay tool was deployed for privilege escalation.
+  range: +/-15m
+  query: |
+    aggregation: false
+    logsource:
+      category: process_creation
+      product: windows
+    detection:
+      selection:
+        ProcessGuid: '{event_data.process.entity_id}'
+        Image|contains:
+          - 'RottenPotato'
+          - 'HotPotato'
+          - 'JuicyPotato'
+          - 'LocalPotato'
+          - 'PetitPotam'
+      condition: selection
+    fields:
+      - Image
+      - CommandLine
+- question: What CLSID was targeted for COM object abuse in the privilege escalation?
+  context: Identifies the specific COM server abused for NTLM relay in Potato exploits.
+  range: +/-15m
+  query: |
+    aggregation: false
+    logsource:
+      category: process_creation
+      product: windows
+    detection:
+      selection:
+        ProcessGuid: '{event_data.process.entity_id}'
+        CommandLine|contains:
+          - '-c "{'
+          - '-clsid'
+      condition: selection
+    fields:
+      - CommandLine
+- question: What child processes were spawned after the relay attack tool execution?
+  context: Tracks the elevated commands or payloads executed with SYSTEM privileges after successful relay.
+  range: +2h
+  query: |
+    aggregation: false
+    logsource:
+      category: process_creation
+      product: windows
+    detection:
+      selection:
+        ParentProcessGuid: '{event_data.process.entity_id}'
+      condition: selection
+    fields:
+      - User
+      - Image
+      - CommandLine
+      - ParentImage
+- question: What network connections occurred during or after the relay tool execution?
+  context: Reveals SMB relay targets, NTLM authentication captures, or C2 communications.
+  range: +30m
+  query: |
+    aggregation: false
+    logsource:
+      category: network_connection
+      product: windows
+    detection:
+      selection:
+        hostname: '{event_data.host.name}'
+      condition: selection
+    fields:
+      - User
+      - Image
+      - DestinationIp
+      - DestinationPort
+      - ProcessGuid
+- question: Were there authentication coercion attempts using PetitPotam or SpoolSample?
+  context: Identifies attempts to force domain controller or server authentication for relay attacks.
+  range: +/-30m
+  query: |
+    aggregation: false
+    logsource:
+      category: process_creation
+      product: windows
+    detection:
+      selection:
+        hostname: '{event_data.host.name}'
+        CommandLine|contains:
+          - 'PetitPotam'
+          - 'SpoolSample'
+      condition: selection
+    fields:
+      - User
+      - Image
+      - CommandLine
+- question: What process activity occurred on this host in the 15 minutes before relay tool execution?
+  context: Identifies the delivery mechanism or initial access that led to relay tool deployment.
+  range: -15m
+  query: |
+    aggregation: false
+    logsource:
+      category: process_creation
+      product: windows
+    detection:
+      selection:
+        hostname: '{event_data.host.name}'
+      condition: selection
+    fields:
+      - User
+      - Image
+      - CommandLine
+- question: Has this user account executed relay attack tools on other hosts?
+  context: Identifies lateral movement or campaign scope using the same privilege escalation techniques.
+  range: -7d
+  query: |
+    aggregation: false
+    logsource:
+      category: process_creation
+      product: windows
+    detection:
+      selection:
+        User: '{event_data.user.name}'
+        CommandLine|contains:
+          - 'Potato'
+          - 'smbrelay'
+          - 'ntlmrelay'
+          - 'PetitPotam'
+      filter:
+        hostname: '{event_data.host.name}'
+      condition: selection and not filter
+    fields:
+      - hostname
+      - Image
+      - CommandLine
+- question: Are there other hosts showing relay attack tool execution?
+  context: Detects campaign-wide deployment of NTLM relay and privilege escalation techniques.
+  range: +/-24h
+  query: |
+    aggregation: false
+    logsource:
+      category: process_creation
+      product: windows
+    detection:
+      selection:
+        Image|contains:
+          - 'Potato'
+          - 'Responder'
+          - 'smbrelayx'
+          - 'ntlmrelayx'
+      filter:
+        hostname: '{event_data.host.name}'
+      condition: selection and not filter
+    fields:
+      - hostname
+      - User
+      - Image
+      - CommandLine
+- question: Were accounts added to privileged groups after the relay attack?
+  context: Detects privilege escalation success through group membership changes.
+  range: +1h
+  query: |
+    aggregation: false
+    logsource:
+      category: process_creation
+      product: windows
+    detection:
+      selection:
+        hostname: '{event_data.host.name}'
+        Image|endswith: '\net.exe'
+        CommandLine|contains:
+          - 'localgroup'
+          - 'administrators'
+          - 'add'
+      condition: selection
+    fields:
+      - User
+      - Image
+      - CommandLine
+- question: Were credentials dumped or accessed after successful privilege escalation?
+  context: Identifies post-exploitation credential harvesting following SYSTEM privilege acquisition.
+  range: +2h
+  query: |
+    aggregation: false
+    logsource:
+      category: process_creation
+      product: windows
+    detection:
+      selection:
+        hostname: '{event_data.host.name}'
+        CommandLine|contains:
+          - 'mimikatz'
+          - 'lsass'
+          - 'procdump'
+          - 'sekurlsa'
+      condition: selection
+    fields:
+      - User
+      - Image
+      - CommandLine

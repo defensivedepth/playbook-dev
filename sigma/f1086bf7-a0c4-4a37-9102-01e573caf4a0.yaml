@@ -1,0 +1,215 @@
+name: Renamed Whoami Execution
+id: 1500071
+description: |
+  Detects execution of whoami.exe that has been renamed to a different filename to evade detection. The whoami
+  utility displays user, group, and privileges information for the current logged-in user and is commonly used
+  during reconnaissance phases of intrusions. Renaming system utilities is a technique used to bypass security
+  controls that rely on process name detection. This activity has been observed in malware campaigns including
+  Agent Tesla keylogger delivery and various post-exploitation frameworks. Detection relies on the OriginalFileName
+  PE header metadata which persists even when the executable is renamed. Legitimate use of renamed whoami is
+  extremely rare and typically indicates either reconnaissance activity or security tool evasion.
+type: detection
+detection_id: f1086bf7-a0c4-4a37-9102-01e573caf4a0
+detection_category: ''
+detection_type: sigma
+contributors:
+- SecurityOnionSolutions
+created: 2025-01-15
+questions:
+- question: What filename was used for the renamed whoami.exe execution?
+  context: Identifies the specific evasion technique and naming pattern used to disguise the utility.
+  range: +/-5m
+  query: |
+    aggregation: false
+    logsource:
+      category: process_creation
+      product: windows
+    detection:
+      selection:
+        ProcessGuid: '{event_data.process.entity_id}'
+      condition: selection
+    fields:
+      - User
+      - hostname
+      - Image
+      - CommandLine
+      - OriginalFileName
+- question: What process spawned the renamed whoami execution?
+  context: Determines the parent process and execution chain leading to the reconnaissance activity.
+  range: -15m
+  query: |
+    aggregation: false
+    logsource:
+      category: process_creation
+      product: windows
+    detection:
+      selection:
+        ProcessGuid: '{event_data.process.parent.entity_id}'
+      condition: selection
+    fields:
+      - User
+      - hostname
+      - Image
+      - CommandLine
+      - ParentImage
+- question: Is execution of renamed system utilities typical for this user account?
+  context: Establishes baseline behavior to determine if this is normal administrative activity or suspicious reconnaissance.
+  range: -7d
+  query: |
+    aggregation: false
+    logsource:
+      category: process_creation
+      product: windows
+    detection:
+      selection:
+        User: '{event_data.user.name}'
+        OriginalFileName:
+          - 'whoami.exe'
+          - 'net.exe'
+          - 'ipconfig.exe'
+          - 'systeminfo.exe'
+      filter:
+        Image|endswith:
+          - '\whoami.exe'
+          - '\net.exe'
+          - '\ipconfig.exe'
+          - '\systeminfo.exe'
+      condition: selection and not filter
+    fields:
+      - hostname
+      - Image
+      - OriginalFileName
+- question: What other processes were executed on this host in the 15 minutes before the renamed whoami?
+  context: Identifies preparatory activity and delivery mechanisms preceding the reconnaissance phase.
+  range: -15m
+  query: |
+    aggregation: false
+    logsource:
+      category: process_creation
+      product: windows
+    detection:
+      selection:
+        hostname: '{event_data.host.name}'
+      condition: selection
+    fields:
+      - User
+      - Image
+      - CommandLine
+      - ParentImage
+- question: Were additional reconnaissance commands executed after the renamed whoami?
+  context: Reveals the scope of discovery activity following initial user identification.
+  range: +30m
+  query: |
+    aggregation: false
+    logsource:
+      category: process_creation
+      product: windows
+    detection:
+      selection:
+        hostname: '{event_data.host.name}'
+        Image|endswith:
+          - '\net.exe'
+          - '\net1.exe'
+          - '\ipconfig.exe'
+          - '\systeminfo.exe'
+          - '\nltest.exe'
+          - '\query.exe'
+      condition: selection
+    fields:
+      - User
+      - Image
+      - CommandLine
+      - ParentImage
+- question: Were files with suspicious names created or modified around the time of execution?
+  context: Identifies the delivery or staging location of the renamed whoami executable.
+  range: +/-30m
+  query: |
+    aggregation: false
+    logsource:
+      category: file_event
+      product: windows
+    detection:
+      selection:
+        hostname: '{event_data.host.name}'
+        TargetFilename|endswith: '.exe'
+      filter:
+        TargetFilename|contains:
+          - '\Windows\System32\'
+          - '\Windows\SysWOW64\'
+          - '\Program Files\'
+      condition: selection and not filter
+    fields:
+      - User
+      - Image
+      - TargetFilename
+      - ProcessGuid
+- question: Have other renamed system utilities been executed on this host?
+  context: Detects systematic renaming of multiple system utilities indicating organized evasion techniques.
+  range: +/-24h
+  query: |
+    aggregation: false
+    logsource:
+      category: process_creation
+      product: windows
+    detection:
+      selection:
+        hostname: '{event_data.host.name}'
+        OriginalFileName:
+          - 'net.exe'
+          - 'net1.exe'
+          - 'ipconfig.exe'
+          - 'systeminfo.exe'
+          - 'tasklist.exe'
+          - 'netstat.exe'
+      filter:
+        Image|contains:
+          - '\Windows\System32\'
+          - '\Windows\SysWOW64\'
+      condition: selection and not filter
+    fields:
+      - User
+      - Image
+      - CommandLine
+      - OriginalFileName
+- question: What network connections occurred after the renamed whoami execution?
+  context: Reveals potential C2 communications or data exfiltration following reconnaissance.
+  range: +1h
+  query: |
+    aggregation: false
+    logsource:
+      category: network_connection
+      product: windows
+    detection:
+      selection:
+        hostname: '{event_data.host.name}'
+      condition: selection
+    fields:
+      - User
+      - Image
+      - DestinationIp
+      - DestinationPort
+      - ProcessGuid
+- question: Has this host shown other signs of compromise or malware execution?
+  context: Identifies additional indicators of compromise that may be part of the same infection chain.
+  range: +/-24h
+  query: |
+    aggregation: false
+    logsource:
+      category: process_creation
+      product: windows
+    detection:
+      selection:
+        hostname: '{event_data.host.name}'
+        CommandLine|contains:
+          - 'powershell.exe -enc'
+          - 'invoke-expression'
+          - 'downloadstring'
+          - 'bypass'
+          - 'mshta'
+          - 'regsvr32'
+      condition: selection
+    fields:
+      - User
+      - Image
+      - CommandLine
+      - ParentImage

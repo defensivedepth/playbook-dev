@@ -1,0 +1,193 @@
+name: HackTool - F-Secure C3 Load by Rundll32
+id: 1500052
+description: |
+  Detects the execution of F-Secure C3 (Custom Command and Control) framework DLLs loaded via rundll32.exe with the default exported function StartNodeRelay. C3 is a framework for rapid prototyping of custom C2 channels with integration into existing offensive toolkits. The StartNodeRelay export is a signature of the NodeRelayDll component, which establishes relay nodes in the C3 architecture for command and control communications.
+type: detection
+detection_id: b18c9d4c-fac9-4708-bd06-dd5bfacf200f
+detection_category: ''
+detection_type: sigma
+contributors:
+- SecurityOnionSolutions
+created: 2025-10-15
+questions:
+- question: What was the full rundll32 command line with the StartNodeRelay function?
+  context: Reveals the exact DLL path and parameters used to load the C3 relay node.
+  range: +/-15m
+  query: |
+    aggregation: false
+    logsource:
+      category: process_creation
+      product: windows
+    detection:
+      selection:
+        ProcessGuid: '{event_data.process.entity_id}'
+      condition: selection
+    fields:
+      - User
+      - Image
+      - CommandLine
+      - hostname
+- question: What process executed the rundll32 command with StartNodeRelay?
+  context: Identifies the parent process chain and execution context.
+  range: +/-15m
+  query: |
+    aggregation: false
+    logsource:
+      category: process_creation
+      product: windows
+    detection:
+      selection:
+        ProcessGuid: '{event_data.process.parent.entity_id}'
+      condition: selection
+    fields:
+      - User
+      - Image
+      - CommandLine
+      - ParentImage
+- question: What DLL file was loaded by rundll32 with the StartNodeRelay export?
+  context: Identifies the C3 NodeRelay DLL location and file details.
+  range: -30m
+  query: |
+    aggregation: false
+    logsource:
+      category: file_event
+      product: windows
+    detection:
+      selection:
+        hostname: '{event_data.host.name}'
+        TargetFilename|endswith: '.dll'
+      condition: selection
+    fields:
+      - User
+      - Image
+      - TargetFilename
+      - ProcessGuid
+- question: What child processes were spawned after the C3 relay node loaded?
+  context: Tracks post-execution activity and follow-on commands executed through the C3 framework.
+  range: +2h
+  query: |
+    aggregation: false
+    logsource:
+      category: process_creation
+      product: windows
+    detection:
+      selection:
+        ParentProcessGuid: '{event_data.process.entity_id}'
+      condition: selection
+    fields:
+      - User
+      - Image
+      - CommandLine
+      - ParentImage
+- question: What network connections occurred after the StartNodeRelay execution?
+  context: Reveals C2 communications and relay node network activity.
+  range: +30m
+  query: |
+    aggregation: false
+    logsource:
+      category: network_connection
+      product: windows
+    detection:
+      selection:
+        ProcessGuid: '{event_data.process.entity_id}'
+      condition: selection
+    fields:
+      - User
+      - Image
+      - DestinationIp
+      - DestinationPort
+- question: What other rundll32 executions occurred on this host in the past 24 hours?
+  context: Establishes baseline rundll32 activity and identifies other potentially related DLL loading.
+  range: -24h
+  query: |
+    aggregation: false
+    logsource:
+      category: process_creation
+      product: windows
+    detection:
+      selection:
+        hostname: '{event_data.host.name}'
+        Image|endswith: '\rundll32.exe'
+      condition: selection
+    fields:
+      - User
+      - Image
+      - CommandLine
+- question: What process activity occurred on this host in the 15 minutes before the C3 execution?
+  context: Identifies the delivery mechanism or initial access that led to C3 deployment.
+  range: -15m
+  query: |
+    aggregation: false
+    logsource:
+      category: process_creation
+      product: windows
+    detection:
+      selection:
+        hostname: '{event_data.host.name}'
+      condition: selection
+    fields:
+      - User
+      - Image
+      - CommandLine
+- question: Has this user account executed rundll32 with StartNodeRelay on other hosts?
+  context: Identifies lateral movement or campaign scope using the same C3 framework.
+  range: -7d
+  query: |
+    aggregation: false
+    logsource:
+      category: process_creation
+      product: windows
+    detection:
+      selection:
+        User: '{event_data.user.name}'
+        CommandLine|contains: 'StartNodeRelay'
+      filter:
+        hostname: '{event_data.host.name}'
+      condition: selection and not filter
+    fields:
+      - hostname
+      - Image
+      - CommandLine
+- question: Are there other hosts showing rundll32 loading DLLs with StartNodeRelay?
+  context: Detects campaign-wide deployment of the C3 C2 framework.
+  range: +/-24h
+  query: |
+    aggregation: false
+    logsource:
+      category: process_creation
+      product: windows
+    detection:
+      selection:
+        CommandLine|contains|all:
+          - 'rundll32'
+          - 'StartNodeRelay'
+      filter:
+        hostname: '{event_data.host.name}'
+      condition: selection and not filter
+    fields:
+      - hostname
+      - User
+      - Image
+      - CommandLine
+- question: Were any scheduled tasks or services created around the time of C3 execution?
+  context: Detects persistence mechanisms established for C3 relay node operation.
+  range: +/-2h
+  query: |
+    aggregation: false
+    logsource:
+      category: process_creation
+      product: windows
+    detection:
+      selection:
+        hostname: '{event_data.host.name}'
+        Image|endswith:
+          - '\schtasks.exe'
+          - '\sc.exe'
+        CommandLine|contains:
+          - 'create'
+          - '/create'
+      condition: selection
+    fields:
+      - User
+      - Image
+      - CommandLine

@@ -1,0 +1,243 @@
+name: HackTool - Inveigh Execution
+id: 1500057
+description: |
+  Detects the use of Inveigh, a cross-platform .NET IPv4/IPv6 machine-in-the-middle tool for credential capture. Inveigh conducts network poisoning attacks through spoofing of name resolution protocols (LLMNR, DNS, mDNS, NBNS, DHCPv6, ICMPv6) to redirect traffic and capture NTLM challenge-response hashes. The tool operates through both packet sniffing and protocol-specific listeners, supporting HTTP, HTTPS, SMB, LDAP, WebDAV, and Proxy Auth captures. Inveigh has been observed in PYSA/Mespinoza ransomware campaigns for credential harvesting during lateral movement phases.
+type: detection
+detection_id: b99a1518-1ad5-4f65-bc95-1ffff97a8fd0
+detection_category: ''
+detection_type: sigma
+contributors:
+- SecurityOnionSolutions
+created: 2025-10-15
+questions:
+- question: What was the full Inveigh command line with spoofing parameters?
+  context: Reveals the exact configuration and target parameters used for network poisoning.
+  range: +/-15m
+  query: |
+    aggregation: false
+    logsource:
+      category: process_creation
+      product: windows
+    detection:
+      selection:
+        ProcessGuid: '{event_data.process.entity_id}'
+      condition: selection
+    fields:
+      - User
+      - Image
+      - CommandLine
+      - hostname
+- question: What process executed the Inveigh tool?
+  context: Identifies the parent process chain and execution context.
+  range: +/-15m
+  query: |
+    aggregation: false
+    logsource:
+      category: process_creation
+      product: windows
+    detection:
+      selection:
+        ProcessGuid: '{event_data.process.parent.entity_id}'
+      condition: selection
+    fields:
+      - User
+      - Image
+      - CommandLine
+      - ParentImage
+- question: What spoofing protocols were enabled in the Inveigh command?
+  context: Determines which name resolution protocols were targeted for poisoning attacks.
+  range: +/-15m
+  query: |
+    aggregation: false
+    logsource:
+      category: process_creation
+      product: windows
+    detection:
+      selection:
+        ProcessGuid: '{event_data.process.entity_id}'
+        CommandLine|contains:
+          - 'LLMNR'
+          - 'NBNS'
+          - 'mDNS'
+          - 'DHCPv6'
+          - 'DNS'
+      condition: selection
+    fields:
+      - CommandLine
+- question: What IP addresses or network ranges were targeted by Inveigh spoofing?
+  context: Identifies the specific targets or scope of the network poisoning attack.
+  range: +/-15m
+  query: |
+    aggregation: false
+    logsource:
+      category: process_creation
+      product: windows
+    detection:
+      selection:
+        ProcessGuid: '{event_data.process.entity_id}'
+        CommandLine|contains:
+          - 'ReplyToIPs'
+          - 'ReplyToMACs'
+          - 'SpooferIP'
+          - 'SnifferIP'
+      condition: selection
+    fields:
+      - CommandLine
+- question: What child processes were spawned after Inveigh execution?
+  context: Tracks follow-on activity and credential usage after hash capture.
+  range: +2h
+  query: |
+    aggregation: false
+    logsource:
+      category: process_creation
+      product: windows
+    detection:
+      selection:
+        ParentProcessGuid: '{event_data.process.entity_id}'
+      condition: selection
+    fields:
+      - User
+      - Image
+      - CommandLine
+      - ParentImage
+- question: What network connections were established by Inveigh for spoofing and capture?
+  context: Reveals the network interfaces and protocols used for poisoning attacks.
+  range: +30m
+  query: |
+    aggregation: false
+    logsource:
+      category: network_connection
+      product: windows
+    detection:
+      selection:
+        ProcessGuid: '{event_data.process.entity_id}'
+      condition: selection
+    fields:
+      - User
+      - Image
+      - DestinationIp
+      - DestinationPort
+      - SourcePort
+- question: What files were created on this host within 30 minutes after Inveigh execution?
+  context: Identifies captured credential output files and logs created by Inveigh.
+  range: +30m
+  query: |
+    aggregation: false
+    logsource:
+      category: file_event
+      product: windows
+    detection:
+      selection:
+        hostname: '{event_data.host.name}'
+        TargetFilename|endswith:
+          - '.txt'
+          - '.log'
+          - '.ntlmv2'
+      condition: selection
+    fields:
+      - User
+      - Image
+      - TargetFilename
+- question: What process activity occurred on this host in the 15 minutes before Inveigh execution?
+  context: Identifies the delivery mechanism or initial access that led to Inveigh deployment.
+  range: -15m
+  query: |
+    aggregation: false
+    logsource:
+      category: process_creation
+      product: windows
+    detection:
+      selection:
+        hostname: '{event_data.host.name}'
+      condition: selection
+    fields:
+      - User
+      - Image
+      - CommandLine
+- question: Has this user account executed Inveigh on other hosts?
+  context: Identifies lateral movement or campaign scope using the same credential harvesting tool.
+  range: -7d
+  query: |
+    aggregation: false
+    logsource:
+      category: process_creation
+      product: windows
+    detection:
+      selection:
+        User: '{event_data.user.name}'
+        CommandLine|contains:
+          - 'Inveigh'
+          - 'SpooferIP'
+          - 'ReplyToIPs'
+      filter:
+        hostname: '{event_data.host.name}'
+      condition: selection and not filter
+    fields:
+      - hostname
+      - Image
+      - CommandLine
+- question: Are there other hosts showing Inveigh execution or LLMNR/NBNS poisoning activity?
+  context: Detects campaign-wide deployment of network poisoning attacks.
+  range: +/-24h
+  query: |
+    aggregation: false
+    logsource:
+      category: process_creation
+      product: windows
+    detection:
+      selection:
+        CommandLine|contains:
+          - 'Inveigh'
+          - 'SpooferIP'
+      filter:
+        hostname: '{event_data.host.name}'
+      condition: selection and not filter
+    fields:
+      - hostname
+      - User
+      - Image
+      - CommandLine
+- question: Were SMB connections or authentication attempts observed after Inveigh started?
+  context: Identifies successful credential relay or hash capture activity.
+  range: +2h
+  query: |
+    aggregation: false
+    logsource:
+      category: network_connection
+      product: windows
+    detection:
+      selection:
+        hostname: '{event_data.host.name}'
+        DestinationPort:
+          - 445
+          - 139
+      condition: selection
+    fields:
+      - User
+      - Image
+      - DestinationIp
+      - DestinationPort
+      - ProcessGuid
+- question: Were any lateral movement tools executed after Inveigh credential capture?
+  context: Detects use of captured credentials for lateral movement or privilege escalation.
+  range: +2h
+  query: |
+    aggregation: false
+    logsource:
+      category: process_creation
+      product: windows
+    detection:
+      selection:
+        hostname: '{event_data.host.name}'
+        Image|endswith:
+          - '\psexec.exe'
+          - '\wmiexec.py'
+          - '\atexec.py'
+        CommandLine|contains:
+          - 'pass the hash'
+          - 'administrator'
+      condition: selection
+    fields:
+      - User
+      - Image
+      - CommandLine

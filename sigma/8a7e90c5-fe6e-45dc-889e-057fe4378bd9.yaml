@@ -1,0 +1,326 @@
+name: HackTool - SysmonEOP Execution
+id: 1500066
+description: |
+  Detects execution of SysmonEOP, a proof-of-concept tool that exploits CVE-2022-41120 and CVE-2022-44704
+  in Sysmon versions 12.0 through 14.12. The vulnerability exists in the ClipboardChange event handler and
+  allows local users to perform arbitrary file deletion or writing in the context of NT AUTHORITY\SYSTEM
+  by abusing junction points and DACL manipulation. The tool chains arbitrary file operations to exploit
+  printer driver setup files for privilege escalation. This activity could represent legitimate security
+  research, penetration testing, or unauthorized privilege escalation attempts on vulnerable Sysmon installations.
+type: detection
+detection_id: 8a7e90c5-fe6e-45dc-889e-057fe4378bd9
+detection_category: ''
+detection_type: sigma
+contributors:
+- SecurityOnionSolutions
+created: 2025-01-15
+questions:
+- question: What was the full command line used to execute SysmonEOP.exe on this host?
+  context: Identifies the specific arguments and execution parameters used with the exploit tool.
+  range: +/-5m
+  query: |
+    aggregation: false
+    logsource:
+      category: process_creation
+      product: windows
+    detection:
+      selection:
+        ProcessGuid: '{event_data.process.entity_id}'
+      condition: selection
+    fields:
+      - User
+      - hostname
+      - Image
+      - CommandLine
+      - IntegrityLevel
+- question: What process spawned the SysmonEOP.exe execution?
+  context: Determines the parent process and delivery mechanism for the exploit tool.
+  range: -15m
+  query: |
+    aggregation: false
+    logsource:
+      category: process_creation
+      product: windows
+    detection:
+      selection:
+        ProcessGuid: '{event_data.process.parent.entity_id}'
+      condition: selection
+    fields:
+      - User
+      - hostname
+      - Image
+      - CommandLine
+      - ParentImage
+- question: Has SysmonEOP.exe execution occurred on other hosts in the environment?
+  context: Reveals potential multi-host compromise or testing activity across the network.
+  range: +/-24h
+  query: |
+    aggregation: false
+    logsource:
+      category: process_creation
+      product: windows
+    detection:
+      selection:
+        Image|endswith: '\SysmonEOP.exe'
+      filter:
+        hostname: '{event_data.host.name}'
+      condition: selection and not filter
+    fields:
+      - hostname
+      - User
+      - Image
+      - CommandLine
+- question: What other processes were executed on this host in the 15 minutes before SysmonEOP.exe?
+  context: Identifies preparatory activity and delivery mechanisms preceding the exploit.
+  range: -15m
+  query: |
+    aggregation: false
+    logsource:
+      category: process_creation
+      product: windows
+    detection:
+      selection:
+        hostname: '{event_data.host.name}'
+      condition: selection
+    fields:
+      - User
+      - Image
+      - CommandLine
+      - ParentImage
+- question: Were any directories created in C:\Sysmon or junction points established prior to execution?
+  context: The exploit requires creating or manipulating the C:\Sysmon directory to abuse ArchiveDirectory settings.
+  range: -30m
+  query: |
+    aggregation: false
+    logsource:
+      category: process_creation
+      product: windows
+    detection:
+      selection:
+        hostname: '{event_data.host.name}'
+        CommandLine|contains:
+          - 'C:\Sysmon'
+          - 'C:\\Sysmon'
+          - 'mklink'
+          - 'junction'
+      condition: selection
+    fields:
+      - User
+      - Image
+      - CommandLine
+      - ParentImage
+- question: Were any printer driver setup files (.inf files) modified or deleted on the system?
+  context: The exploit chains file deletion to target printer driver setup information files for privilege escalation.
+  range: +/-1h
+  query: |
+    aggregation: false
+    logsource:
+      category: file_event
+      product: windows
+    detection:
+      selection:
+        hostname: '{event_data.host.name}'
+        TargetFilename|contains: '.inf'
+        TargetFilename|contains:
+          - '\INF\'
+          - '\DriverStore\'
+      condition: selection
+    fields:
+      - User
+      - Image
+      - TargetFilename
+      - ProcessGuid
+- question: Did SysmonEOP.exe spawn any child processes after execution?
+  context: Reveals post-exploitation activity such as privilege escalation verification or subsequent tool execution.
+  range: +2h
+  query: |
+    aggregation: false
+    logsource:
+      category: process_creation
+      product: windows
+    detection:
+      selection:
+        ParentProcessGuid: '{event_data.process.entity_id}'
+      condition: selection
+    fields:
+      - User
+      - Image
+      - CommandLine
+      - ParentImage
+      - IntegrityLevel
+- question: Were elevated cmd.exe or PowerShell processes spawned after SysmonEOP execution?
+  context: The exploit goal is to spawn elevated processes running as SYSTEM via DLL manipulation and printer driver abuse.
+  range: +2h
+  query: |
+    aggregation: false
+    logsource:
+      category: process_creation
+      product: windows
+    detection:
+      selection:
+        hostname: '{event_data.host.name}'
+        Image|endswith:
+          - '\cmd.exe'
+          - '\powershell.exe'
+          - '\pwsh.exe'
+        IntegrityLevel:
+          - 'System'
+          - 'High'
+      condition: selection
+    fields:
+      - User
+      - Image
+      - CommandLine
+      - ParentImage
+      - IntegrityLevel
+- question: Were any DLLs copied to C:\Windows\System32 around the time of SysmonEOP execution?
+  context: The exploit copies printer driver DLLs to system32 with modified permissions to enable DLL hijacking for privilege escalation.
+  range: +/-1h
+  query: |
+    aggregation: false
+    logsource:
+      category: file_event
+      product: windows
+    detection:
+      selection:
+        hostname: '{event_data.host.name}'
+        TargetFilename|contains: 'C:\Windows\System32\'
+        TargetFilename|endswith: '.dll'
+      condition: selection
+    fields:
+      - User
+      - Image
+      - TargetFilename
+      - ProcessGuid
+- question: Were permissions modified on any files in C:\Windows\System32 to allow low privilege user access?
+  context: The exploit modifies DLL permissions in system32 to enable low privilege users to overwrite system DLLs.
+  range: +/-1h
+  query: |
+    aggregation: false
+    logsource:
+      category: process_creation
+      product: windows
+    detection:
+      selection:
+        hostname: '{event_data.host.name}'
+        CommandLine|contains:
+          - 'icacls'
+          - 'cacls'
+          - 'SetACL'
+        CommandLine|contains:
+          - 'C:\Windows\System32'
+          - 'C:\\Windows\\System32'
+      condition: selection
+    fields:
+      - User
+      - Image
+      - CommandLine
+      - ParentImage
+- question: Were any printer drivers reinstalled or modified after SysmonEOP execution?
+  context: The exploit abuses printer driver reinstallation to execute malicious setup files and copy DLLs.
+  range: +2h
+  query: |
+    aggregation: false
+    logsource:
+      category: process_creation
+      product: windows
+    detection:
+      selection:
+        hostname: '{event_data.host.name}'
+        Image|contains:
+          - '\printui.exe'
+          - '\pnputil.exe'
+          - '\rundll32.exe'
+        CommandLine|contains:
+          - 'AddPrinter'
+          - 'add-printer'
+          - '/add-driver'
+      condition: selection
+    fields:
+      - User
+      - Image
+      - CommandLine
+      - ParentImage
+- question: Are there registry modifications related to Sysmon ArchiveDirectory configuration?
+  context: Identifies attempts to manipulate Sysmon ArchiveDirectory settings that the exploit relies on.
+  range: +/-1h
+  query: |
+    aggregation: false
+    logsource:
+      category: registry_event
+      product: windows
+    detection:
+      selection:
+        hostname: '{event_data.host.name}'
+        TargetObject|contains:
+          - 'Sysmon'
+          - 'ArchiveDirectory'
+      condition: selection
+    fields:
+      - User
+      - Image
+      - TargetObject
+      - Details
+      - EventType
+- question: Did the same user account execute SysmonEOP.exe on other hosts in the environment?
+  context: Tracks cross-host activity to determine if the exploit is part of coordinated testing or widespread compromise.
+  range: +/-24h
+  query: |
+    aggregation: false
+    logsource:
+      category: process_creation
+      product: windows
+    detection:
+      selection:
+        User: '{event_data.user.name}'
+        Image|endswith: '\SysmonEOP.exe'
+      filter:
+        hostname: '{event_data.host.name}'
+      condition: selection and not filter
+    fields:
+      - hostname
+      - User
+      - Image
+      - CommandLine
+- question: Are there network connections to GitHub or file sharing services prior to SysmonEOP execution?
+  context: The exploit tool is publicly available on GitHub and may be downloaded before execution.
+  range: -1h
+  query: |
+    aggregation: false
+    logsource:
+      category: network
+      service: dns
+    detection:
+      selection:
+        src_ip: '{source.ip}'
+        dns.query.name|contains:
+          - 'github'
+          - 'githubusercontent'
+          - 'pastebin'
+          - 'transfer.sh'
+      condition: selection
+    fields:
+      - dns.query.name
+      - dns.resolved_ip
+- question: What files were downloaded or written to disk in the 30 minutes before SysmonEOP.exe execution?
+  context: Identifies the delivery method for the exploit tool such as browser downloads or remote file transfers.
+  range: -30m
+  query: |
+    aggregation: false
+    logsource:
+      category: file_event
+      product: windows
+    detection:
+      selection:
+        hostname: '{event_data.host.name}'
+        TargetFilename|endswith:
+          - '.exe'
+          - '.zip'
+          - '.rar'
+          - '.7z'
+      condition: selection
+    fields:
+      - User
+      - Image
+      - TargetFilename
+      - ProcessGuid
