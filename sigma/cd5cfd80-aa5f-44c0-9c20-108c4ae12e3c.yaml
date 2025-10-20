@@ -76,6 +76,28 @@ questions:
       - file.name
       - TargetFilename
 
+- question: Were there any DNS queries or domain resolutions immediately after the firewall rule creation?
+  context: Reveals what the system attempted to contact after opening firewall access, which may indicate command-and-control infrastructure or data exfiltration endpoints.
+  range: +30m
+  query: |
+    aggregation: false
+    logsource:
+      category: dns
+    detection:
+      selection:
+        host.name: '{event_data.host.name}'
+      filter:
+        QueryName|endswith:
+          - '.local'
+          - '.arpa'
+          - '.internal'
+      condition: selection and not filter
+    fields:
+      - QueryName
+      - QueryType
+      - QueryResults
+      - Image
+
 - question: Were any related network connections established after the firewall rule was created?
   context: Related in this context are network connections that would not have been possible before the firewall rule was created. Will need to filter based on contextual information (port, protocol, etc.)
   range: +4h
