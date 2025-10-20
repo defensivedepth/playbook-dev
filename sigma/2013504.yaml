@@ -12,7 +12,7 @@ contributors:
 created: 2024-01-15
 questions:
   - question: What was the complete HTTP request containing the APT-HTTP user agent?
-    context: Reveals the full request details including destination and any additional headers.
+    context: Reveals the full request details.
     range: +/-15m
     query: |
       aggregation: false
@@ -29,22 +29,8 @@ questions:
         - http.virtual_host
         - http.uri
         - http.status_code
-  - question: Does this host normally perform package management activities?
-    context: Determines if APT package management requests are typical for this system.
-    range: -7d
-    query: |
-      aggregation: true
-      logsource:
-        category: network
-        service: http
-      detection:
-        selection:
-          dst_ip: '{destination.ip}'
-        condition: selection
-      fields:
-        - dst_ip
-  - question: What process initiated the connection with the APT user agent?
-    context: Identifies the specific application or service performing package management.
+  - question: Was the process that initiated the connection related to package management?
+    context: Identifies the specific application that initiated the connection.
     range: +/-15m
     query: |
       aggregation: false
@@ -62,8 +48,8 @@ questions:
         - Image
         - CommandLine
         - ProcessGuid
-  - question: What DNS queries preceded this APT package management request?
-    context: Shows which package repositories were resolved before the connection.
+  - question: Did APT-related DNS queries preceded the APT HTTP request?
+    context: Shows if package repositories were resolved before the connection.
     range: -5m
     query: |
       aggregation: false
@@ -78,6 +64,20 @@ questions:
         - dns.query.name
         - dns.query.type_name
         - dns.resolved_ip
+  - question: Does this host normally perform package management activities?
+    context: Determines if APT package management requests are typical for this system.
+    range: -7d
+    query: |
+      aggregation: true
+      logsource:
+        category: network
+        service: http
+      detection:
+        selection:
+          dst_ip: '{destination.ip}'
+        condition: selection
+      fields:
+        - dst_ip
   - question: What other external connections occurred from this host during the same timeframe?
     context: Identifies additional network activity that may be related to system updates.
     range: +/-10m
