@@ -1,0 +1,215 @@
+name: New Firewall Rule Added Via Netsh.EXE
+id: 1500476
+description: |
+  Detects the addition of new firewall rules to the Windows firewall via netsh. This technique can be used for legitimate system administration tasks such as configuring application access, enabling remote management services, or implementing security policies. However, it can also be used to open inbound ports for command-and-control communications, enable remote access tools that would otherwise be blocked, or disable firewall protections for specific applications. This technique is commonly observed in ransomware campaigns and remote access tool deployments where actors need to ensure their tooling can communicate through the firewall. Investigate to determine whether the firewall modification aligns with approved network security policies or represents unauthorized defense impairment.
+type: detection
+detection_id: cd5cfd80-aa5f-44c0-9c20-108c4ae12e3c
+detection_category: ''
+detection_type: sigma
+contributors:
+- SecurityOnionSolutions
+created: 2025-10-20
+questions:
+- question: What specific program or port was added to the firewall allowlist?
+  context: Identifies the exact firewall rule details including the program path, port number, protocol, and rule direction to assess whether the change aligns with legitimate business needs.
+  range: +/-5m
+  query: |
+    aggregation: false
+    logsource:
+      category: process_creation
+      product: windows
+    detection:
+      selection:
+        ProcessGuid: '{event_data.process.entity_id}'
+      condition: selection
+    fields:
+      - User
+      - host.name
+      - CommandLine
+      - IntegrityLevel
+- question: What type of system had the firewall modified?
+  context: Determines system role and criticality by examining hostname patterns, installed services, and running processes to assess whether firewall changes on this asset require additional scrutiny.
+  range: -5m
+  query: |
+    aggregation: false
+    logsource:
+      category: process_creation
+      product: windows
+    detection:
+      selection:
+        host.name: '{event_data.host.name}'
+      condition: selection
+    fields:
+      - host.name
+      - Image
+      - User
+      - ParentImage
+- question: Is the user account a member of authorized administrative groups?
+  context: Validates whether the user has legitimate authority to modify firewall settings by examining group membership and privileges at the time of execution.
+  range: +/-10m
+  query: |
+    aggregation: false
+    logsource:
+      category: process_creation
+      product: windows
+    detection:
+      selection:
+        User: '{event_data.user.name}'
+        host.name: '{event_data.host.name}'
+        IntegrityLevel: 'High'
+      condition: selection
+    fields:
+      - User
+      - Image
+      - CommandLine
+      - ParentImage
+- question: What initiated the netsh firewall command?
+  context: Reveals the parent process that spawned the firewall modification to determine if it originated from an interactive administrative session, script, or unexpected process.
+  range: +/-15m
+  query: |
+    aggregation: false
+    logsource:
+      category: process_creation
+      product: windows
+    detection:
+      selection:
+        ProcessGuid: '{event_data.process.parent.entity_id}'
+      condition: selection
+    fields:
+      - User
+      - host.name
+      - Image
+      - CommandLine
+      - ParentImage
+      - IntegrityLevel
+- question: If a program was allowed through the firewall, where is that executable located and what are its properties?
+  context: Examines file location, signature, hash, and creation time of the program being allowed through the firewall to identify suspicious locations like Temp directories or unsigned executables.
+  range: +/-30m
+  query: |
+    aggregation: false
+    logsource:
+      category: file_event
+      product: windows
+    detection:
+      selection:
+        host.name: '{event_data.host.name}'
+        TargetFilename|contains:
+          - '.exe'
+          - '.dll'
+      condition: selection
+    fields:
+      - TargetFilename
+      - User
+      - Hashes
+      - Image
+- question: Has this user account added firewall rules on this system in the past two weeks?
+  context: Establishes historical baseline to determine if this activity is routine administrative work or represents anomalous behavior for this user.
+  range: -14d
+  query: |
+    aggregation: false
+    logsource:
+      category: process_creation
+      product: windows
+    detection:
+      selection:
+        User: '{event_data.user.name}'
+        host.name: '{event_data.host.name}'
+        Image|endswith: '\netsh.exe'
+        CommandLine|contains|all:
+          - ' firewall '
+          - ' add '
+      filter:
+        ProcessGuid: '{event_data.process.entity_id}'
+      condition: selection and not filter
+    fields:
+      - '@timestamp'
+      - CommandLine
+      - ParentImage
+- question: Were any network connections established from this system after the firewall rule was created?
+  context: Identifies new network activity that may have been enabled by the firewall modification, including unexpected outbound connections or inbound access.
+  range: +4h
+  query: |
+    aggregation: false
+    logsource:
+      category: network_connection
+      product: windows
+    detection:
+      selection:
+        host.name: '{event_data.host.name}'
+        Initiated: 'true'
+      condition: selection
+    fields:
+      - Image
+      - DestinationIp
+      - DestinationPort
+      - User
+- question: Were any new services installed or modified on this system recently?
+  context: Detects service creation or modification that may be related to the firewall change, such as remote access services or persistence mechanisms.
+  range: +/-2h
+  query: |
+    aggregation: false
+    logsource:
+      product: windows
+      service: system
+    detection:
+      selection:
+        host.name: '{event_data.host.name}'
+        EventID:
+          - 7045  # Service installed
+          - 7040  # Service start type changed
+      condition: selection
+    fields:
+      - ServiceName
+      - ImagePath
+      - ServiceType
+      - User
+- question: Has this firewall rule change been made on other systems in the environment?
+  context: Reveals whether this is an isolated change or part of a coordinated modification across multiple systems, which may indicate scripted deployment or lateral movement.
+  range: +/-24h
+  query: |
+    aggregation: false
+    logsource:
+      category: process_creation
+      product: windows
+    detection:
+      selection:
+        Image|endswith: '\netsh.exe'
+        CommandLine|contains|all:
+          - ' firewall '
+          - ' add '
+      filter:
+        host.name: '{event_data.host.name}'
+      condition: selection and not filter
+    fields:
+      - host.name
+      - User
+      - CommandLine
+      - '@timestamp'
+- question: Were there other administrative or configuration changes made around the same time?
+  context: Identifies related system modifications such as account creation, scheduled task installation, or registry changes that may indicate a broader compromise or setup phase.
+  range: +/-1h
+  query: |
+    aggregation: false
+    logsource:
+      category: process_creation
+      product: windows
+    detection:
+      selection:
+        host.name: '{event_data.host.name}'
+        Image|endswith:
+          - '\net.exe'
+          - '\net1.exe'
+          - '\sc.exe'
+          - '\schtasks.exe'
+          - '\reg.exe'
+          - '\powershell.exe'
+          - '\wmic.exe'
+      filter:
+        ProcessGuid: '{event_data.process.entity_id}'
+        ParentProcessGuid: '{event_data.process.entity_id}'
+      condition: selection and not filter
+    fields:
+      - Image
+      - CommandLine
+      - User
+      - '@timestamp'
