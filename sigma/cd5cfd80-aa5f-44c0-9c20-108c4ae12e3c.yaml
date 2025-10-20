@@ -39,6 +39,7 @@ questions:
       condition: selection
     fields:
       - host.name
+      - host.ip 
       - User
 
 - question: What initiated the netsh firewall command?
@@ -93,7 +94,8 @@ questions:
       - destination.port
 
 - question: Has this user account added firewall rules on this system in the recent past?
-  context: Establishes historical baseline to determine if this activity is routine administrative work or represents abnormal behavior for this user.
+  context: Establishes historical baseline to determine if this activity is routine administrative work or represents abnormal
+   behavior for this user.
   range: -14d
   query: |
     aggregation: false
