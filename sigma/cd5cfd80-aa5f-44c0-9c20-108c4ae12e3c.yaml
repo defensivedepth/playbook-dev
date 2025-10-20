@@ -23,10 +23,9 @@ questions:
         ProcessGuid: '{event_data.process.entity_id}'
       condition: selection
     fields:
-      - host.name
       - CommandLine
 
-- question: Is the user account a member of authorized administrative groups?
+- question: Is the user account a member of authorized administrative groups for this system?
   context: Validates whether the user has legitimate authority to modify firewall settings by examining group membership and privileges at the time of execution.
   range: +/-10m
   query: |
@@ -36,8 +35,7 @@ questions:
       product: windows
     detection:
       selection:
-        User: '{event_data.user.name}'
-        host.name: '{event_data.host.name}'
+        ProcessGuid: '{event_data.process.entity_id}'
       condition: selection
     fields:
       - host.name
@@ -56,11 +54,10 @@ questions:
         ProcessGuid: '{event_data.process.parent.entity_id}'
       condition: selection
     fields:
-      - User
       - Image
       - CommandLine
 
-- question: If an executable was allowed through the firewall, where is that executable located and what are its properties?
+- question: If an executable was allowed through the firewall, where is that executable located and how did it get there?
   context: Examines file location, signature, hash, and creation time of the program being allowed through the firewall to identify suspicious locations like Temp directories or unsigned executables.
   range: +/-60m
   query: |
@@ -73,7 +70,6 @@ questions:
         host.name: '{event_data.host.name}'
         TargetFilename|contains:
           - '.exe'
-          - '.dll'
       condition: selection
     fields:
       - file.name
@@ -88,7 +84,7 @@ questions:
       category: network_connection
     detection:
       selection:
-        related_ip: '{related.ip}'
+        related_ip: '{event_data.related.ip}'
       condition: selection
     fields:
       - source.ip
