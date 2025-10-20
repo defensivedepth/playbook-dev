@@ -25,8 +25,8 @@ questions:
     fields:
       - CommandLine
 
-- question: Is the user account a member of authorized administrative groups for this system?
-  context: Validates whether the user has legitimate authority to modify firewall settings by examining group membership and privileges at the time of execution.
+- question: Is the user account authorized to make this change on this system?
+  context: Validates whether the user has legitimate authority to modify firewall settings on this system.
   range: +/-10m
   query: |
     aggregation: false
@@ -75,8 +75,8 @@ questions:
       - file.name
       - TargetFilename
 
-- question: Were any suspicious network connections established after the firewall rule was created?
-  context: Identifies new network activity that may have been enabled by the firewall modification, including unexpected outbound connections or inbound access.
+- question: Were any related network connections established after the firewall rule was created?
+  context: Related in this context are network connections that would not have been possible before the firewall rule was created. Will need to filter based on contextual information (port, protocol, etc.)
   range: +4h
   query: |
     aggregation: false
@@ -93,7 +93,7 @@ questions:
       - destination.port
 
 - question: Has this user account added firewall rules on this system in the recent past?
-  context: Establishes historical baseline to determine if this activity is routine administrative work or represents anomalous behavior for this user.
+  context: Establishes historical baseline to determine if this activity is routine administrative work or represents abnormal behavior for this user.
   range: -14d
   query: |
     aggregation: false
@@ -154,6 +154,7 @@ questions:
           - 7040  # Service start type changed
       condition: selection
     fields:
+      - event.code
       - winlog.event_data.param4
       - winlog.event_data.param1
 
