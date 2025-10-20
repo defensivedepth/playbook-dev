@@ -1,204 +1,196 @@
 name: ET INFO GNU/Linux APT User-Agent Outbound likely related to package management
-id: 22013504
+id: 1213144
 description: |
-  This alert detects outbound HTTP requests with the APT-HTTP user-agent, indicating that a Linux system is
-  using the APT package manager to download software packages or updates. APT (Advanced Package Tool) is the
-  standard package management system for Debian-based Linux distributions including Ubuntu. This activity is
-  typically legitimate system maintenance, including security updates, software installations, or automated
-  update processes. Investigation should verify that the system is authorized to access external package
-  repositories, confirm the update sources are trusted, and ensure the activity aligns with system maintenance
-  schedules.
+  Detects HTTP requests with APT-HTTP user agent patterns from internal hosts to external servers.
+  Typically indicates legitimate package management activity on Linux systems but may occur during system setup or software installation.
 type: detection
-detection_id: '2013504'
+detection_id: 2013504
 detection_category: ''
 detection_type: nids
 contributors:
-- SecurityOnionSolutions
-created: 2025-10-01
+  - SecurityOnionSolutions
+created: 2024-01-15
 questions:
-- question: What Linux system initiated the APT package management request?
-  context: Identifies the specific host performing package management operations.
-  range: +/-5m
-  query: |
-    aggregation: false
-    logsource:
-      category: network
-      service: http
-    detection:
-      selection:
-        src_ip: '{source.ip}'
-        http.user_agent: '{http.useragent}'
-      condition: selection
-    fields:
-      - src_ip
-      - dst_ip
-      - http.method
-      - http.uri
-      - http.virtual_host
-      - http.user_agent
-- question: What package repositories is this system accessing?
-  context: Reveals the specific package sources and whether they are official or third-party repositories.
-  range: +/-15m
-  query: |
-    aggregation: false
-    logsource:
-      category: network
-      service: http
-    detection:
-      selection:
-        src_ip: '{source.ip}'
-        http.user_agent|contains: 'APT-HTTP'
-      condition: selection
-    fields:
-      - src_ip
-      - dst_ip
-      - http.virtual_host
-      - http.uri
-      - http.method
-- question: What is the baseline frequency of APT package management activity from this host?
-  context: Establishes whether this update activity is routine or unusual for this system.
-  range: -7d
-  query: |
-    aggregation: true
-    logsource:
-      category: network
-      service: http
-    detection:
-      selection:
-        src_ip: '{source.ip}'
-        http.user_agent|contains: 'APT-HTTP'
-      condition: selection
-    fields:
-      - src_ip
-      - http.virtual_host
-- question: What DNS queries did this host make before the APT request?
-  context: Identifies the package repository domains being resolved and accessed.
-  range: -5m
-  query: |
-    aggregation: false
-    logsource:
-      category: network
-      service: dns
-    detection:
-      selection:
-        src_ip: '{source.ip}'
-      condition: selection
-    fields:
-      - src_ip
-      - dns.query.name
-      - dns.resolved_ip
-      - dns.query.type_name
-- question: What specific packages or files are being downloaded via APT?
-  context: Reveals the software being installed or updated through package management.
-  range: +/-15m
-  query: |
-    aggregation: false
-    logsource:
-      category: network
-      service: http
-    detection:
-      selection:
-        src_ip: '{source.ip}'
-        http.user_agent|contains: 'APT-HTTP'
-      condition: selection
-    fields:
-      - http.uri
-      - http.virtual_host
-      - http.status_code
-      - http.request.body.length
-- question: Are other Linux systems also performing package management operations?
-  context: Determines if this is isolated activity or part of coordinated system maintenance.
-  range: -1h
-  query: |
-    aggregation: false
-    logsource:
-      category: network
-      service: http
-    detection:
-      selection:
-        http.user_agent|contains: 'APT-HTTP'
-      filter:
-        src_ip: '{source.ip}'
-      condition: selection and not filter
-    fields:
-      - src_ip
-      - dst_ip
-      - http.virtual_host
-- question: What process on this host initiated the APT package management?
-  context: Identifies whether updates are automated, user-initiated, or triggered by another process.
-  range: +/-15m
-  query: |
-    aggregation: false
-    logsource:
-      category: process_creation
-    detection:
-      selection:
-        host.ip: '{source.ip}'
-        Image|contains:
-          - 'apt'
-          - 'apt-get'
-          - 'aptitude'
-          - 'unattended-upgrade'
-      condition: selection
-    fields:
-      - Image
-      - CommandLine
-      - User
-      - ProcessGuid
-      - ParentImage
-- question: What user account is associated with this APT activity?
-  context: Links the package management activity to a specific user or automated process.
-  range: +/-15m
-  query: |
-    aggregation: false
-    logsource:
-      category: process_creation
-    detection:
-      selection:
-        host.ip: '{source.ip}'
-      condition: selection
-    fields:
-      - User
-      - Image
-      - CommandLine
-- question: Has this host accessed any non-standard or suspicious package repositories?
-  context: Identifies potential security risks from untrusted software sources.
-  range: -24h
-  query: |
-    aggregation: false
-    logsource:
-      category: network
-      service: http
-    detection:
-      selection:
-        src_ip: '{source.ip}'
-        http.user_agent|contains: 'APT-HTTP'
-      trusted_filter:
-        http.virtual_host|contains:
-          - 'ubuntu.com'
-          - 'debian.org'
-          - 'canonical.com'
-      condition: selection and not trusted_filter
-    fields:
-      - http.virtual_host
-      - http.uri
-      - dst_ip
-- question: Are there any related security alerts for this Linux system?
-  context: Reveals other detections that may indicate system compromise or policy violations.
-  range: -24h
-  query: |
-    aggregation: false
-    logsource:
-      category: alert
-    detection:
-      selection:
-        src_ip: '{source.ip}'
-      filter:
-        document_id: '{soc_id}'
-      condition: selection and not filter
-    fields:
-      - src_ip
-      - dst_ip
-      - rule.name
-      - alert.severity_label
-      - alert.category
+  - question: What was the complete HTTP request containing the APT-HTTP user agent?
+    context: Reveals the full request details including destination and any additional headers.
+    range: +/-15m
+    query: |
+      aggregation: false
+      logsource:
+        category: network
+        service: http
+      detection:
+        selection:
+          community_id: '{network.community_id}'
+        condition: selection
+      fields:
+        - http.method
+        - http.useragent
+        - http.virtual_host
+        - http.uri
+        - http.status_code
+  - question: Does this host normally perform package management activities?
+    context: Determines if APT package management requests are typical for this system.
+    range: -7d
+    query: |
+      aggregation: true
+      logsource:
+        category: network
+        service: http
+      detection:
+        selection:
+          dst_ip: '{destination.ip}'
+        condition: selection
+      fields:
+        - dst_ip
+  - question: What process initiated the connection with the APT user agent?
+    context: Identifies the specific application or service performing package management.
+    range: +/-15m
+    query: |
+      aggregation: false
+      logsource:
+        category: network
+      detection:
+        selection:
+          community_id: '{network.community_id}'
+        filter:
+          Image|exists: true
+        condition: selection and filter
+      fields:
+        - hostname
+        - User
+        - Image
+        - CommandLine
+        - ProcessGuid
+  - question: What DNS queries preceded this APT package management request?
+    context: Shows which package repositories were resolved before the connection.
+    range: -5m
+    query: |
+      aggregation: false
+      logsource:
+        category: network
+        service: dns
+      detection:
+        selection:
+          src_ip: '{source.ip}'
+        condition: selection
+      fields:
+        - dns.query.name
+        - dns.query.type_name
+        - dns.resolved_ip
+  - question: What other external connections occurred from this host during the same timeframe?
+    context: Identifies additional network activity that may be related to system updates.
+    range: +/-10m
+    query: |
+      aggregation: false
+      logsource:
+        category: network
+        service: connection
+      detection:
+        selection:
+          src_ip: '{source.ip}'
+        private:
+          dst_ip|cidr:
+            - '10.0.0.0/8'
+            - '127.0.0.0/8'
+            - '172.16.0.0/12'
+            - '192.168.0.0/16'
+            - '169.254.0.0/16'
+        filter:
+          dst_ip: '{network.public_ip}'
+        condition: selection and not (private or filter)
+      fields:
+        - dst_ip
+        - dst_port
+        - network.transport
+        - connection.state_description
+  - question: What files were created during this package management activity?
+    context: Shows what packages or files were installed via APT.
+    range: +1h
+    query: |
+      aggregation: false
+      logsource:
+        category: file_event
+      detection:
+        selection:
+          host.ip: '{network.private_ip}'
+          file.name|endswith:
+          - .exe
+          - .dll
+          - .bat
+          - .cmd
+          - .ps1
+          - .vbs
+          - .js
+          - .scr
+          - .com
+          - .pif
+        condition: selection
+      fields:
+        - file.path
+        - file.name
+        - Image
+        - ProcessGuid
+        - User
+  - question: Are other hosts performing similar package management activities?
+    context: Determines if this is part of coordinated system maintenance or updates.
+    range: +/-24h
+    query: |
+      aggregation: false
+      logsource:
+        category: network
+        service: connection
+      detection:
+        selection:
+          dst_ip: '{network.public_ip}'
+        filter:
+          src_ip: '{source.ip}'
+        condition: selection and not filter
+      fields:
+        - src_ip
+        - dst_port
+        - network.transport
+        - connection.state_description
+  - question: What is the pattern of package management requests from this host?
+    context: Analyzes frequency and timing of APT-related network activity.
+    range: +/-2h
+    query: |
+      aggregation: false
+      logsource:
+        category: network
+        service: connection
+      detection:
+        selection:
+          src_ip: '{related.ip}'
+          dst_ip: '{related.ip}'
+        condition: selection
+      fields:
+        - src_ip
+        - dst_ip
+        - dst_port
+        - network.protocol
+        - event.duration
+        - client.ip_bytes
+        - server.ip_bytes
+        - connection.state_description
+  - question: Were any system services or scheduled tasks created after the package installation?
+    context: Identifies persistence mechanisms that may have been established through package installation.
+    range: +2h
+    query: |
+      aggregation: false
+      logsource:
+        category: process_creation
+      detection:
+        selection:
+          host.ip: '{network.private_ip}'
+          Image|endswith:
+          - schtasks.exe
+          - taskeng.exe
+          - taskhostw.exe
+        condition: selection
+      fields:
+        - CommandLine
+        - Image
+        - ProcessGuid
+        - User
+        - ParentImage
