@@ -10,8 +10,8 @@ contributors:
 - SecurityOnionSolutions
 created: 2025-10-20
 questions:
-- question: Was a specific port or program added to the firewall allowlist?
-  context: Identifies the exact firewall rule details including the program path, port number, protocol, and rule direction to assess whether the change aligns with legitimate business needs.
+- question: Was a specific port or application added to the firewall allowlist?
+  context: Identifies the exact firewall rule details including the application path, port number, protocol, and rule direction to assess whether the change aligns with legitimate business needs.
   range: +/-5m
   query: |
     aggregation: false
@@ -59,7 +59,7 @@ questions:
 
 - question: If an executable was allowed through the firewall, where is that executable located and how did it get there?
   context: Examines file location, signature, hash, and creation time of the program being allowed through the firewall to identify suspicious locations like Temp directories or unsigned executables.
-  range: +/-60m
+  range: -24h
   query: |
     aggregation: false
     logsource:
@@ -140,9 +140,9 @@ questions:
 
 - question: Were any new services installed or modified on this system recently?
   context: Detects service creation or modification that may be related to the firewall change, such as remote access services or persistence mechanisms.
-  range: +/-2h
+  range: +/-6h
   query: |
-    aggregation: false
+    aggregation: true
     logsource:
       product: windows
       service: system
@@ -154,10 +154,8 @@ questions:
           - 7040  # Service start type changed
       condition: selection
     fields:
-      - ServiceName
-      - ImagePath
-      - ServiceType
-      - User
+      - winlog.event_data.param4
+      - winlog.event_data.param1
 
 - question: Were there other administrative or configuration changes made around the same time?
   context: Identifies related system modifications such as account creation, scheduled task installation, or registry changes that may indicate a broader compromise or setup phase.
@@ -187,20 +185,3 @@ questions:
       - CommandLine
       - User
       - '@timestamp'
-- question: What type of system had the firewall modified?
-  context: Determines system role and criticality by examining hostname patterns, installed services, and running processes to assess whether firewall changes on this asset require additional scrutiny.
-  range: -5m
-  query: |
-    aggregation: false
-    logsource:
-      category: process_creation
-      product: windows
-    detection:
-      selection:
-        host.name: '{event_data.host.name}'
-      condition: selection
-    fields:
-      - host.name
-      - Image
-      - User
-      - ParentImage
