@@ -10,7 +10,7 @@ contributors:
 - SecurityOnionSolutions
 created: 2025-10-20
 questions:
-- question: What specific program or port was added to the firewall allowlist?
+- question: Was a specific port or program added to the firewall allowlist?
   context: Identifies the exact firewall rule details including the program path, port number, protocol, and rule direction to assess whether the change aligns with legitimate business needs.
   range: +/-5m
   query: |
@@ -23,27 +23,9 @@ questions:
         ProcessGuid: '{event_data.process.entity_id}'
       condition: selection
     fields:
-      - User
       - host.name
       - CommandLine
-      - IntegrityLevel
-- question: What type of system had the firewall modified?
-  context: Determines system role and criticality by examining hostname patterns, installed services, and running processes to assess whether firewall changes on this asset require additional scrutiny.
-  range: -5m
-  query: |
-    aggregation: false
-    logsource:
-      category: process_creation
-      product: windows
-    detection:
-      selection:
-        host.name: '{event_data.host.name}'
-      condition: selection
-    fields:
-      - host.name
-      - Image
-      - User
-      - ParentImage
+
 - question: Is the user account a member of authorized administrative groups?
   context: Validates whether the user has legitimate authority to modify firewall settings by examining group membership and privileges at the time of execution.
   range: +/-10m
@@ -56,13 +38,11 @@ questions:
       selection:
         User: '{event_data.user.name}'
         host.name: '{event_data.host.name}'
-        IntegrityLevel: 'High'
       condition: selection
     fields:
+      - host.name
       - User
-      - Image
-      - CommandLine
-      - ParentImage
+
 - question: What initiated the netsh firewall command?
   context: Reveals the parent process that spawned the firewall modification to determine if it originated from an interactive administrative session, script, or unexpected process.
   range: +/-15m
@@ -77,14 +57,12 @@ questions:
       condition: selection
     fields:
       - User
-      - host.name
       - Image
       - CommandLine
-      - ParentImage
-      - IntegrityLevel
-- question: If a program was allowed through the firewall, where is that executable located and what are its properties?
+
+- question: If an executable was allowed through the firewall, where is that executable located and what are its properties?
   context: Examines file location, signature, hash, and creation time of the program being allowed through the firewall to identify suspicious locations like Temp directories or unsigned executables.
-  range: +/-30m
+  range: +/-60m
   query: |
     aggregation: false
     logsource:
@@ -98,11 +76,27 @@ questions:
           - '.dll'
       condition: selection
     fields:
+      - file.name
       - TargetFilename
-      - User
-      - Hashes
-      - Image
-- question: Has this user account added firewall rules on this system in the past two weeks?
+
+- question: Were any suspicious network connections established after the firewall rule was created?
+  context: Identifies new network activity that may have been enabled by the firewall modification, including unexpected outbound connections or inbound access.
+  range: +4h
+  query: |
+    aggregation: false
+    logsource:
+      category: network_connection
+    detection:
+      selection:
+        related_ip: '{related.ip}'
+      condition: selection
+    fields:
+      - source.ip
+      - source.port
+      - destination.ip
+      - destination.port
+
+- question: Has this user account added firewall rules on this system in the recent past?
   context: Establishes historical baseline to determine if this activity is routine administrative work or represents anomalous behavior for this user.
   range: -14d
   query: |
@@ -122,47 +116,9 @@ questions:
         ProcessGuid: '{event_data.process.entity_id}'
       condition: selection and not filter
     fields:
-      - '@timestamp'
       - CommandLine
-      - ParentImage
-- question: Were any network connections established from this system after the firewall rule was created?
-  context: Identifies new network activity that may have been enabled by the firewall modification, including unexpected outbound connections or inbound access.
-  range: +4h
-  query: |
-    aggregation: false
-    logsource:
-      category: network_connection
-      product: windows
-    detection:
-      selection:
-        host.name: '{event_data.host.name}'
-        Initiated: 'true'
-      condition: selection
-    fields:
-      - Image
-      - DestinationIp
-      - DestinationPort
-      - User
-- question: Were any new services installed or modified on this system recently?
-  context: Detects service creation or modification that may be related to the firewall change, such as remote access services or persistence mechanisms.
-  range: +/-2h
-  query: |
-    aggregation: false
-    logsource:
-      product: windows
-      service: system
-    detection:
-      selection:
-        host.name: '{event_data.host.name}'
-        EventID:
-          - 7045  # Service installed
-          - 7040  # Service start type changed
-      condition: selection
-    fields:
-      - ServiceName
-      - ImagePath
-      - ServiceType
-      - User
+
+
 - question: Has this firewall rule change been made on other systems in the environment?
   context: Reveals whether this is an isolated change or part of a coordinated modification across multiple systems, which may indicate scripted deployment or lateral movement.
   range: +/-24h
@@ -185,6 +141,28 @@ questions:
       - User
       - CommandLine
       - '@timestamp'
+
+- question: Were any new services installed or modified on this system recently?
+  context: Detects service creation or modification that may be related to the firewall change, such as remote access services or persistence mechanisms.
+  range: +/-2h
+  query: |
+    aggregation: false
+    logsource:
+      product: windows
+      service: system
+    detection:
+      selection:
+        host.name: '{event_data.host.name}'
+        EventID:
+          - 7045  # Service installed
+          - 7040  # Service start type changed
+      condition: selection
+    fields:
+      - ServiceName
+      - ImagePath
+      - ServiceType
+      - User
+
 - question: Were there other administrative or configuration changes made around the same time?
   context: Identifies related system modifications such as account creation, scheduled task installation, or registry changes that may indicate a broader compromise or setup phase.
   range: +/-1h
@@ -213,3 +191,20 @@ questions:
       - CommandLine
       - User
       - '@timestamp'
+- question: What type of system had the firewall modified?
+  context: Determines system role and criticality by examining hostname patterns, installed services, and running processes to assess whether firewall changes on this asset require additional scrutiny.
+  range: -5m
+  query: |
+    aggregation: false
+    logsource:
+      category: process_creation
+      product: windows
+    detection:
+      selection:
+        host.name: '{event_data.host.name}'
+      condition: selection
+    fields:
+      - host.name
+      - Image
+      - User
+      - ParentImage
