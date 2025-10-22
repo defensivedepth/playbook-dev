@@ -42,7 +42,7 @@ questions:
       - host.ip 
       - User
 
-- question: What initiated the netsh firewall command?
+- question: What process initiated the netsh firewall command?
   context: Reveals the parent process that spawned the firewall modification to determine if it originated from an interactive administrative session, script, or unexpected process.
   range: +/-15m
   query: |
@@ -59,7 +59,7 @@ questions:
       - CommandLine
 
 - question: If an executable was allowed through the firewall, where is that executable located and how did it get there?
-  context: Examines file location, signature, hash, and creation time of the program being allowed through the firewall to identify suspicious locations like Temp directories or unsigned executables.
+  context: Examines file location, hash, and creation time of the program being allowed through the firewall to identify suspicious locations like temp directories or unsigned executables.
   range: -24h
   query: |
     aggregation: false
@@ -75,28 +75,6 @@ questions:
     fields:
       - file.name
       - TargetFilename
-
-- question: Were there any DNS queries or domain resolutions immediately after the firewall rule creation?
-  context: Reveals what the system attempted to contact after opening firewall access, which may indicate command-and-control infrastructure or data exfiltration endpoints.
-  range: +30m
-  query: |
-    aggregation: false
-    logsource:
-      category: dns
-    detection:
-      selection:
-        host.name: '{event_data.host.name}'
-      filter:
-        QueryName|endswith:
-          - '.local'
-          - '.arpa'
-          - '.internal'
-      condition: selection and not filter
-    fields:
-      - QueryName
-      - QueryType
-      - QueryResults
-      - Image
 
 - question: Were any related network connections established after the firewall rule was created?
   context: Related in this context are network connections that would not have been possible before the firewall rule was created. Will need to filter based on contextual information (port, protocol, etc.)
@@ -181,32 +159,3 @@ questions:
       - event.code
       - winlog.event_data.param4
       - winlog.event_data.param1
-
-- question: Were there other administrative or configuration changes made around the same time?
-  context: Identifies related system modifications such as account creation, scheduled task installation, or registry changes that may indicate a broader compromise or setup phase.
-  range: +/-1h
-  query: |
-    aggregation: false
-    logsource:
-      category: process_creation
-      product: windows
-    detection:
-      selection:
-        host.name: '{event_data.host.name}'
-        Image|endswith:
-          - '\net.exe'
-          - '\net1.exe'
-          - '\sc.exe'
-          - '\schtasks.exe'
-          - '\reg.exe'
-          - '\powershell.exe'
-          - '\wmic.exe'
-      filter:
-        ProcessGuid: '{event_data.process.entity_id}'
-        ParentProcessGuid: '{event_data.process.entity_id}'
-      condition: selection and not filter
-    fields:
-      - Image
-      - CommandLine
-      - User
-      - '@timestamp'

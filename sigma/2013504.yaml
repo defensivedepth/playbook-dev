@@ -13,7 +13,7 @@ created: 2024-01-15
 questions:
   - question: What was the complete HTTP request containing the APT-HTTP user agent?
     context: Reveals the full request details.
-    range: +/-15m
+    range: -15m
     query: |
       aggregation: false
       logsource:
@@ -31,7 +31,7 @@ questions:
         - http.status_code
   - question: Was the process that initiated the connection related to package management?
     context: Identifies the specific application that initiated the connection.
-    range: +/-15m
+    range: -15m
     query: |
       aggregation: false
       logsource:
@@ -50,7 +50,7 @@ questions:
         - ProcessGuid
   - question: Did APT-related DNS queries preceded the APT HTTP request?
     context: Shows if package repositories were resolved before the connection.
-    range: -5m
+    range: -3m
     query: |
       aggregation: false
       logsource:
